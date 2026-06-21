@@ -71,6 +71,7 @@ let activeCallTimer = null; // caller-side answer timeout
 const lastRing = new Map(); // peerId -> ts of last incoming ring (throttle)
 let ringWindow = null; // hidden, focus-less window that plays the incoming ring tone
 let incomingNotification = null; // the click-to-answer OS notification for the current ring
+let soundWindow = null; // ONE persistent hidden window that plays short notification sounds (the custom message ding)
 
 let pushTimer = null;
 const startedHidden = process.argv.includes('--hidden');
@@ -175,6 +176,7 @@ async function init() {
 
   createTray();
   createWindow();
+  if (!SMOKE) createSoundWindow(); // persistent hidden WebAudio window for the message ding
   wireIpc();
 
   if (SMOKE) {
@@ -497,14 +499,19 @@ function wireIpc() {
 }
 
 function sanitizeSettings(partial) {
-  const allowed = ['deviceName', 'hideIps', 'stealth', 'autoStart', 'theme'];
+  const allowed = [
+    'deviceName', 'hideIps', 'stealth', 'autoStart', 'theme',
+    'notifyMessages', 'soundMessages', 'notifyCalls', 'soundCalls',
+  ];
   const out = {};
   if (!partial) return out;
   for (const k of allowed) if (k in partial) out[k] = partial[k];
   if ('deviceName' in out) {
     out.deviceName = String(out.deviceName || '').trim().slice(0, 40) || self.name;
   }
-  for (const b of ['hideIps', 'stealth', 'autoStart']) if (b in out) out[b] = !!out[b];
+  for (const b of ['hideIps', 'stealth', 'autoStart', 'notifyMessages', 'soundMessages', 'notifyCalls', 'soundCalls']) {
+    if (b in out) out[b] = !!out[b];
+  }
   return out;
 }
 
@@ -878,6 +885,8 @@ function onIncomingMessage(m) {
  * Clicking it shows the window AND opens that conversation in the renderer.
  */
 function notifyChat(peerId, peerName, text) {
+  // Notifications off => no toast AND no sound (per settings contract).
+  if (!settings.get('notifyMessages')) return;
   if (!Notification.isSupported()) return;
   const now = Date.now();
   const prev = lastNotify.get(peerId) || 0;
@@ -888,9 +897,14 @@ function notifyChat(peerId, peerName, text) {
       title: peerName || 'New message',
       body: String(text || '').slice(0, 120),
       icon: fileIcon(),
+      // We play our own custom "ding" below; tell Windows to stay silent so we
+      // don't get its default notification sound on top of ours.
+      silent: true,
     });
     n.on('click', () => openConvoFromNotification(peerId));
     n.show();
+    // Custom pleasant 2-note chime (only if the message sound is enabled).
+    if (settings.get('soundMessages')) playDing();
   } catch (_) {
     // notifications are best-effort; never let a failure break message handling
   }
@@ -996,6 +1010,47 @@ function clearPendingIncoming(notifyRenderer) {
 }
 
 // ---------------------------------------------------------------------------
+// Notification sounds (focus-less): ONE persistent hidden window hosts a
+// WebAudio synth so we can play our own short "ding" for incoming messages
+// instead of letting Windows play its default notification sound (the message
+// Notification is created with silent:true). Created once at startup; reused for
+// every message rather than spawning a window per message.
+// ---------------------------------------------------------------------------
+function createSoundWindow() {
+  try {
+    if (soundWindow && !soundWindow.isDestroyed()) return;
+    soundWindow = new BrowserWindow({
+      show: false,
+      focusable: false,
+      skipTaskbar: true,
+      width: 1,
+      height: 1,
+      webPreferences: {
+        // self-contained inline WebAudio page; no preload / node access needed
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: false,
+      },
+    });
+    soundWindow.on('closed', () => {
+      soundWindow = null;
+    });
+    soundWindow.loadFile(path.join(__dirname, '..', 'renderer', 'sounds.html'));
+  } catch (_) {
+    // sound is best-effort; never let it break startup or message handling
+  }
+}
+
+/** Play the custom short message "ding" via the persistent hidden sound window. */
+function playDing() {
+  try {
+    if (!soundWindow || soundWindow.isDestroyed()) createSoundWindow();
+    if (!soundWindow || soundWindow.isDestroyed()) return;
+    soundWindow.webContents.executeJavaScript('window.__ding && window.__ding()').catch(() => {});
+  } catch (_) {}
+}
+
+// ---------------------------------------------------------------------------
 // Incoming ring (focus-less): a hidden window plays a looping tone, and an OS
 // notification (click to answer) is shown — we never raise/focus a window for
 // an incoming call so a fullscreen game isn't disrupted.
@@ -1087,14 +1142,15 @@ function onIncomingSignal(sig) {
     pendingIncomingTimer = setTimeout(() => clearPendingIncoming(true), 60000);
 
     // INCOMING calls must NOT raise or focus any window (a fullscreen game would
-    // be disrupted). Instead: play a hidden looping ring tone + show a
-    // click-to-answer OS notification. The in-app ring banner still updates IF
-    // the panel happens to already be open, but we never force it open.
-    startIncomingRing();
+    // be disrupted). Instead: (optionally) play a hidden looping ring tone +
+    // show a click-to-answer OS notification. The in-app ring banner ALWAYS
+    // updates IF the panel happens to already be open (so the call still works
+    // even with sound + toast off), but we never force the panel open.
+    if (settings.get('soundCalls')) startIncomingRing();
     if (win && !win.isDestroyed()) {
       win.webContents.send('call-ring', { callId: sig.callId, peerId: sig.peerId, peerName: sig.peerName });
     }
-    if (Notification.isSupported() && !spammy) {
+    if (settings.get('notifyCalls') && Notification.isSupported() && !spammy) {
       const callerName = sig.peerName || 'Someone';
       // Plain toast — the most reliable form on Windows. (toastXml/scenario
       // "incomingCall" would bypass Focus Assist but hits an Electron bug where
@@ -1537,6 +1593,7 @@ function doQuit() {
     activeCall = null;
     if (callWindow && !callWindow.isDestroyed()) callWindow.destroy();
     if (ringWindow && !ringWindow.isDestroyed()) ringWindow.destroy();
+    if (soundWindow && !soundWindow.isDestroyed()) soundWindow.destroy();
     discovery && discovery.stop();
     server && server.stop();
     relay && relay.stop();

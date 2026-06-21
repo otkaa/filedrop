@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Filedrop Sounds</title>
+  </head>
+  <body>
+    <!--
+      Hidden (show:false) window whose only job is to play short notification
+      sounds (a pleasant 2-note "ding" for incoming chat messages) WITHOUT
+      putting any visible UI on screen or stealing focus. The main process
+      triggers a sound via executeJavaScript() calling window.__ding().
+      No preload, no node access — this is a self-contained WebAudio synth so we
+      don't need a sound asset and Windows never plays its default notification
+      ding (the OS Notification is created with silent:true).
+
+      Mirrors ring.html but plays a SHORT one-shot chime, never a loop.
+    -->
+    <script>
+      (function () {
+        'use strict';
+        var ctx = null;
+
+        // soft attack/decay so a note isn't a harsh click
+        function note(at, freq, dur) {
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = freq;
+          gain.gain.setValueAtTime(0.0001, at);
+          gain.gain.exponentialRampToValueAtTime(0.22, at + 0.02);
+          gain.gain.setValueAtTime(0.22, at + dur - 0.08);
+          gain.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(at);
+          osc.stop(at + dur + 0.02);
+        }
+
+        // A short, pleasant rising 2-note chime (~0.3s total). One-shot only.
+        window.__ding = function () {
+          try {
+            if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') ctx.resume();
+            var t = ctx.currentTime;
+            note(t + 0.0, 660, 0.16); // E5
+            note(t + 0.12, 880, 0.22); // A5
+          } catch (e) {}
+        };
+      })();
+    </script>
+  </body>
+</html>

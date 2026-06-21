@@ -40,6 +40,12 @@ class Settings {
       stealth: false, // invisible mode: don't announce our presence
       theme: 'system', // 'system' | 'dark' | 'light'
 
+      // notifications (all on by default)
+      notifyMessages: true, // show an OS toast for an incoming chat message
+      soundMessages: true, // play the custom "ding" for an incoming chat message
+      notifyCalls: true, // show the click-to-answer toast for an incoming call
+      soundCalls: true, // play the looping ring tone for an incoming call
+
       // manually-added addresses (host:port), persisted + auto-reconnected.
       // This is what makes the app usable over a VPN, where LAN discovery fails.
       savedPeers: [], // [{ host, port, name }]

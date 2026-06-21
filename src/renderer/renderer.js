@@ -121,6 +121,16 @@ function wireStaticUi() {
   document.getElementById('set-stealth').onchange = (e) =>
     api.updateSettings({ stealth: e.target.checked });
 
+  // notifications
+  document.getElementById('set-notify-messages').onchange = (e) =>
+    api.updateSettings({ notifyMessages: e.target.checked });
+  document.getElementById('set-sound-messages').onchange = (e) =>
+    api.updateSettings({ soundMessages: e.target.checked });
+  document.getElementById('set-notify-calls').onchange = (e) =>
+    api.updateSettings({ notifyCalls: e.target.checked });
+  document.getElementById('set-sound-calls').onchange = (e) =>
+    api.updateSettings({ soundCalls: e.target.checked });
+
   document.getElementById('btn-folder').onclick = () => api.pickDownloadFolder();
   document.getElementById('btn-openfolder').onclick = () => api.openDownloadFolder();
   document.getElementById('btn-update-check').onclick = () => api.updateCheck();
@@ -176,6 +186,10 @@ function render() {
   check('set-autostart', s.autoStart);
   check('set-hideips', s.hideIps);
   check('set-stealth', s.stealth);
+  check('set-notify-messages', s.notifyMessages);
+  check('set-sound-messages', s.soundMessages);
+  check('set-notify-calls', s.notifyCalls);
+  check('set-sound-calls', s.soundCalls);
   renderUpdate();
   renderRelayCode();
   renderSaved();
