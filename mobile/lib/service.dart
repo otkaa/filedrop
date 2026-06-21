@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'fcm.dart';
 import 'package:uuid/uuid.dart';
 import 'call.dart';
 import 'call_service.dart';
@@ -55,6 +56,7 @@ class FiledropService extends ChangeNotifier {
   ReceiveServer? _server;
   RelayClient? _relay;
   final _uuid = Uuid();
+  String? _fcmToken; // FCM push token registered with the relay (for offline wake)
 
   /// Our persistent relay code (raw 8 chars, uppercase). Null until init().
   String? relayCode;
@@ -127,11 +129,14 @@ class FiledropService extends ChangeNotifier {
       }
       relayCode = RelayClient.norm(code);
 
+      _fcmToken = await getFcmToken(); // push token so a closed app still gets calls/messages
+
       _relay = RelayClient(
         code: relayCode!,
         deviceId: self.id,
         name: () => self.name,
         fingerprint: () => self.fingerprint,
+        fcmToken: () => _fcmToken,
         onMessage: _onRelayMessage,
         onSignal: _onRelaySignal,
         onAck: _onRelayAck,
@@ -144,6 +149,12 @@ class FiledropService extends ChangeNotifier {
       // fire-and-forget; the client auto-reconnects with backoff on its own
       _relay!.connect();
 
+      // re-register if FCM rotates our push token
+      fcmTokenRefresh.listen((t) {
+        _fcmToken = t;
+        _relay?.reregister();
+      });
+
       // Native CallKit-style ringing screen handles incoming calls: it wakes /
       // lights up the (locked) screen, rings, and vibrates per the ringer mode,
       // and surfaces Answer/Decline. The user's choice comes back as an event.
@@ -151,7 +162,7 @@ class FiledropService extends ChangeNotifier {
         if (event == null) return;
         switch (event.event) {
           case Event.actionCallAccept:
-            acceptCall();
+            _onCallkitAccept(event.body);
             break;
           case Event.actionCallDecline:
           case Event.actionCallTimeout:
@@ -486,6 +497,34 @@ class FiledropService extends ChangeNotifier {
     if (activeCall == null || activeCall!.callId != callId) return;
     if (activeCall!.peer.id != sig['peerId']) return;
     activeCall!.handleSignal(kind, sig['sdp'] as String?);
+  }
+
+  // The user tapped Answer on the native ring screen.
+  Future<void> _onCallkitAccept(dynamic body) async {
+    if (pendingIncomingCall != null) {
+      acceptCall(); // the offer already arrived over the live socket
+      return;
+    }
+    // App was woken from a fully-closed state by FCM — the offer SDP rode in the
+    // push and is in the call's `extra`. Rebuild the pending call, then accept.
+    final extra = (body is Map) ? body['extra'] : null;
+    if (extra is! Map) return;
+    final sdp = '${extra['sdp'] ?? ''}';
+    final fromCode = RelayClient.norm('${extra['fromCode'] ?? ''}');
+    final callId = '${extra['callId'] ?? ''}';
+    if (sdp.isEmpty || fromCode.length != 8) return;
+    final peer = _ensureRelayPeer(fromCode, null);
+    // wait for the relay so the answer can be delivered to the caller
+    for (var i = 0; i < 50 && !(_relay?.connected ?? false); i++) {
+      await Future.delayed(const Duration(milliseconds: 200));
+    }
+    pendingIncomingCall = {
+      'callId': callId.isNotEmpty ? callId : _uuid.v4(),
+      'peer': peer,
+      'offerSdp': sdp,
+      'peerName': peer.name,
+    };
+    acceptCall();
   }
 
   // Show the native ringing call screen (lock-screen wake + ringtone + vibration

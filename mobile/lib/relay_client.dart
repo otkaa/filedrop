@@ -16,6 +16,7 @@ class RelayClient {
   final String deviceId;
   final String Function() name; // late-bound so a rename is picked up on re-register
   final String? Function() fingerprint;
+  final String? Function()? fcmToken; // push token (for offline wake); may be null
 
   /// Called when the server rejects our code as code-taken; the host should
   /// regenerate + persist a fresh code and return it (we then re-register).
@@ -50,6 +51,7 @@ class RelayClient {
     required this.deviceId,
     required this.name,
     required this.fingerprint,
+    this.fcmToken,
     required this.onMessage,
     required this.onSignal,
     this.onAck,
@@ -98,6 +100,7 @@ class RelayClient {
       'deviceId': deviceId,
       'name': name(),
       'fingerprint': fingerprint(),
+      'fcmToken': fcmToken?.call(),
     });
   }
 
@@ -192,6 +195,11 @@ class RelayClient {
     try {
       ws.add(jsonEncode(obj));
     } catch (_) {}
+  }
+
+  /// Re-send our registration (e.g. after the FCM token rotates) if connected.
+  void reregister() {
+    if (_ws != null) _register();
   }
 
   /// Send an app payload to a peer addressed by their code.

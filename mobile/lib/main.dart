@@ -5,6 +5,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'call.dart';
+import 'fcm.dart';
 import 'models.dart';
 import 'service.dart';
 import 'updater.dart';
@@ -13,6 +14,8 @@ final service = FiledropService.instance;
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Firebase + background push handler so calls/messages wake a fully-closed app.
+  await setupFcmBackground();
   try {
     await Permission.notification.request();
   } catch (_) {}

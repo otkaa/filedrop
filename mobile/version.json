@@ -1,5 +1,5 @@
 {
-  "version": "1.6.0",
+  "version": "1.7.0",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Incoming calls now ring like WhatsApp/Discord: full screen over the lock screen, ringtone, and vibration, with Answer/Decline."
+  "notes": "Calls and messages now reach you even when the app is fully closed (push notifications)."
 }

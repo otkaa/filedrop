@@ -17,8 +17,55 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
 
-/** code (UPPERCASE) -> { ws, deviceId, name, fingerprint } */
+/** code (UPPERCASE) -> { ws, deviceId, name, fingerprint, fcmToken } */
 const peers = new Map();
+
+// Missed chat messages for OFFLINE codes, replayed on reconnect.
+/** code (UPPERCASE) -> Array<{ from, fromName, payload }> (cap 50, FIFO) */
+const offlineQueue = new Map();
+const OFFLINE_QUEUE_CAP = 50;
+
+// ── Firebase Cloud Messaging (push to wake fully-closed apps) ──────────────
+// Initializes ONCE from a service-account JSON in env FIREBASE_SERVICE_ACCOUNT.
+// If it's missing/invalid we log a warning and DISABLE push — the relay still
+// works for online peers and must never crash because FCM is misconfigured.
+let admin = null;
+let fcmReady = false;
+(function initFcm() {
+  let saJson = process.env.FIREBASE_SERVICE_ACCOUNT;
+  // LOCAL testing fallback only: read the file if the env var isn't set.
+  // Production always uses the env var; we never print/commit the contents.
+  if (!saJson) {
+    try {
+      saJson = require('fs').readFileSync('C:\\Users\\Admin\\fcm-sa.json', 'utf8');
+    } catch { /* no local file — that's fine */ }
+  }
+  if (!saJson) {
+    console.warn('[fcm] FIREBASE_SERVICE_ACCOUNT not set — push DISABLED (online relay still works).');
+    return;
+  }
+  try {
+    const serviceAccount = JSON.parse(saJson);
+    admin = require('firebase-admin');
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    fcmReady = true;
+    console.log('[fcm] Firebase Admin initialized — push enabled.');
+  } catch (e) {
+    admin = null;
+    fcmReady = false;
+    console.warn('[fcm] invalid service account / init failed — push DISABLED:', e.message);
+  }
+})();
+
+// Fire-and-forget FCM send. Never throws; a bad/expired token logs and continues.
+async function fcmSend(message, label) {
+  if (!fcmReady || !admin) return;
+  try {
+    await admin.messaging().send(message);
+  } catch (e) {
+    console.warn(`[fcm] send failed (${label || 'msg'}):`, e && e.message ? e.message : e);
+  }
+}
 
 function norm(code) {
   // forgiving: case-insensitive, ignore dashes/spaces/punctuation so a user can
@@ -66,17 +113,71 @@ wss.on('connection', (ws) => {
         }
         if (existing && existing.ws !== ws) { try { existing.ws.close(); } catch {} }
         myCode = code;
-        peers.set(code, { ws, deviceId, name: msg.name || 'Device', fingerprint: msg.fingerprint || null });
+        peers.set(code, {
+          ws,
+          deviceId,
+          name: msg.name || 'Device',
+          fingerprint: msg.fingerprint || null,
+          fcmToken: msg.fcmToken || null,
+        });
         send(ws, { type: 'registered', code, online: peers.size });
+        // Deliver any chat messages that arrived while this code was offline.
+        const queued = offlineQueue.get(code);
+        if (queued && queued.length) {
+          for (const item of queued) {
+            send(ws, { type: 'from', from: item.from, fromName: item.fromName, payload: item.payload });
+          }
+          offlineQueue.delete(code);
+        }
         break;
       }
 
       // address a peer by code; server forwards under their *from* identity
       case 'to': {
-        const target = peers.get(norm(msg.to));
+        const toCode = norm(msg.to);
+        const target = peers.get(toCode);
         const me = myCode ? peers.get(myCode) : null;
         if (!target || target.ws.readyState !== target.ws.OPEN) {
-          send(ws, { type: 'peer-offline', to: norm(msg.to), ref: msg.ref });
+          // Target's socket is OFFLINE. Tell the sender, and — if we know the
+          // target's FCM token — try to wake the closed app via push.
+          send(ws, { type: 'peer-offline', to: toCode, ref: msg.ref });
+          const token = target && target.fcmToken;
+          const payload = msg && msg.payload;
+          const fromName = me ? me.name : undefined;
+          if (token && payload && typeof payload === 'object') {
+            if (payload.k === 'rtc' && payload.sig === 'offer') {
+              // High-priority data-only push to wake the app for an incoming call.
+              fcmSend({
+                token,
+                android: { priority: 'high' },
+                data: {
+                  type: 'call',
+                  callId: String(payload.callId || ''),
+                  fromCode: String(myCode || ''),
+                  fromName: String(fromName || ''),
+                  sdp: String(payload.sdp || ''),
+                },
+              }, 'call');
+            } else if (payload.k === 'msg') {
+              // Queue the missed chat message for replay on reconnect …
+              let q = offlineQueue.get(toCode);
+              if (!q) { q = []; offlineQueue.set(toCode, q); }
+              q.push({ from: myCode, fromName, payload });
+              while (q.length > OFFLINE_QUEUE_CAP) q.shift(); // drop oldest past cap
+              // … and push a notification so it shows on a closed phone.
+              fcmSend({
+                token,
+                android: { priority: 'high' },
+                notification: {
+                  title: String(fromName || ''),
+                  body: String(payload.text || ''),
+                },
+                data: { type: 'msg', fromCode: String(myCode || '') },
+              }, 'msg');
+            }
+            // Any other offline payload (answer/decline/hangup/candidate/ack):
+            // nothing new — the peer-offline reply above is the whole story.
+          }
           return;
         }
         send(target.ws, {
