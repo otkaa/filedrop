@@ -27,6 +27,12 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Install Android SDK 36
+        run: |
+          (command -v sdkmanager >/dev/null && sdkmanager "platforms;android-36") \
+            || "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" \
+            || "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"
+
       - name: Scaffold Android project + build APK
         run: |
           set -e
@@ -37,6 +43,10 @@ jobs:
           cp mobile/android-overlay/AndroidManifest.xml _app/android/app/src/main/AndroidManifest.xml
           mkdir -p _app/android/app/src/main/kotlin/dev/filedrop/filedrop
           cp mobile/android-overlay/MainActivity.kt _app/android/app/src/main/kotlin/dev/filedrop/filedrop/MainActivity.kt
+          # a Flutter plugin requires compileSdk 36 — set it on the app and,
+          # via the root override, on every plugin module too.
+          sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' _app/android/app/build.gradle.kts
+          cat mobile/android-overlay/compilesdk-override.gradle.kts >> _app/android/build.gradle.kts
           cd _app
           flutter pub get
           flutter build apk --debug
