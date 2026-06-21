@@ -81,7 +81,11 @@ const server = http.createServer((req, res) => {
   // health check for the host + a friendly landing page
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, online: peers.size }));
+    // `fcm` = is push enabled (service account loaded); `tokens` = how many of
+    // the online codes registered an FCM token. Diagnostics, no secrets.
+    let tokens = 0;
+    for (const p of peers.values()) if (p.fcmToken) tokens++;
+    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens }));
     return;
   }
   res.writeHead(200, { 'content-type': 'text/plain' });
