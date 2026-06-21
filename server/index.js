@@ -183,6 +183,7 @@ wss.on('connection', (ws) => {
         const online = !!(target && target.ws.readyState === target.ws.OPEN);
         const isCallOffer = !!(payload && typeof payload === 'object' &&
                                payload.k === 'rtc' && payload.sig === 'offer');
+        const isMsg = !!(payload && typeof payload === 'object' && payload.k === 'msg');
 
         // CALLS: ALWAYS fire the VoIP push when we have a token, online or not.
         // A swipe-killed Android app commonly leaves a half-open socket here that
@@ -208,27 +209,36 @@ wss.on('connection', (ws) => {
           }, online ? 'call+online' : 'call');
         }
 
+        // MESSAGES: ALSO always push a notification when we have a token, online
+        // or not — same reasoning as calls. A backgrounded or swipe-killed app may
+        // leave a zombie OPEN socket, so gating on liveness would swallow the
+        // notification. The system tray shows this push whenever the app isn't in
+        // the foreground; a foreground app ignores the push and shows its own
+        // in-app notification instead — so there's never a double notification.
+        if (isMsg && token) {
+          fcmSend({
+            token,
+            android: { priority: 'high' },
+            notification: {
+              title: String(fromName || ''),
+              body: String(payload.text || ''),
+            },
+            data: { type: 'msg', fromCode: String(myCode || '') },
+          }, online ? 'msg+online' : 'msg');
+        }
+
         if (!online) {
-          // Target's socket is OFFLINE. Tell the sender; for chat, queue + notify.
+          // Target's socket is OFFLINE. Tell the sender; queue chat for replay so
+          // the message lands in history when the app reconnects (the notification
+          // was already pushed above).
           send(ws, { type: 'peer-offline', to: toCode, ref: msg.ref });
           lastTo = { at: Date.now(), toCode, route: 'offline', hasToken: !!token,
                      k: payload && payload.k, sig: payload && payload.sig };
-          if (token && payload && typeof payload === 'object' && payload.k === 'msg') {
-            // Queue the missed chat message for replay on reconnect …
+          if (isMsg) {
             let q = offlineQueue.get(toCode);
             if (!q) { q = []; offlineQueue.set(toCode, q); }
             q.push({ from: myCode, fromName, payload });
             while (q.length > OFFLINE_QUEUE_CAP) q.shift(); // drop oldest past cap
-            // … and push a notification so it shows on a closed phone.
-            fcmSend({
-              token,
-              android: { priority: 'high' },
-              notification: {
-                title: String(fromName || ''),
-                body: String(payload.text || ''),
-              },
-              data: { type: 'msg', fromCode: String(myCode || '') },
-            }, 'msg');
           }
           // Any other offline payload (answer/decline/hangup/candidate/ack):
           // nothing new — the peer-offline reply above is the whole story.
