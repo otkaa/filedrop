@@ -8,7 +8,6 @@ let editingName = false; // don't clobber the name field while the user types
 let currentConvo = null; // peerId of the open conversation, or null
 let convoMessages = []; // messages for the open conversation
 let currentRing = null; // incoming call { callId, peerId, peerName } or null
-let addrRevealed = false; // "Your address" is hidden until you click Show
 
 // ---------------------------------------------------------------------------
 // boot
@@ -24,6 +23,13 @@ async function init() {
   api.onFilesChosen((paths) => stageFiles(paths));
   api.onFilesDropped((paths) => stageFiles(paths));
   api.onMessage(handleIncomingMessage);
+  api.onOpenConvo((peerId) => {
+    if (!peerId) return;
+    // a chat notification was clicked: jump to Devices and open that conversation
+    const devTab = document.querySelector('.tab[data-tab="devices"]');
+    if (devTab && !devTab.classList.contains('active')) devTab.click();
+    openConversation(peerId);
+  });
   api.onCallRing((r) => {
     currentRing = r;
     renderRing();
@@ -42,8 +48,6 @@ function wireStaticUi() {
       document.getElementById('tab-' + t.dataset.tab).classList.add('active');
       // never strand the user inside a conversation under another tab
       if (currentConvo) closeConversation();
-      // re-hide the address whenever you navigate, so it's private by default
-      addrRevealed = false;
     });
   });
 
@@ -51,8 +55,6 @@ function wireStaticUi() {
   document.getElementById('btn-pick').onclick = chooseFiles;
   document.getElementById('staging-clear').onclick = clearStaging;
   document.getElementById('btn-clear').onclick = () => api.clearFinished();
-  document.getElementById('btn-add').onclick = openModal;
-  document.getElementById('btn-add-link').onclick = openModal;
 
   // "+ by code": reveal the inline input, then connect by relay code
   document.getElementById('btn-add-code').onclick = toggleByCode;
@@ -123,21 +125,6 @@ function wireStaticUi() {
   document.getElementById('btn-update-check').onclick = () => api.updateCheck();
   document.getElementById('btn-quit').onclick = () => api.quit();
 
-  // modal
-  document.getElementById('add-cancel').onclick = closeModal;
-  document.getElementById('add-ok').onclick = submitAddDevice;
-  ['add-host', 'add-port'].forEach((id) => {
-    document.getElementById(id).addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        submitAddDevice();
-      } else if (e.key === 'Escape') {
-        e.preventDefault();
-        closeModal();
-      }
-    });
-  });
-
   // drag overlay visuals (path extraction happens in preload).
   // A depth counter alone can get stuck visible if Chromium drops the terminal
   // dragleave when a drag exits the frameless window, so we also use a watchdog
@@ -190,7 +177,6 @@ function render() {
   check('set-stealth', s.stealth);
   renderUpdate();
   renderRelayCode();
-  renderAddresses();
   renderSaved();
 
   renderRequests();
@@ -539,62 +525,9 @@ async function submitByCode() {
 }
 
 // ---------------------------------------------------------------------------
-// your address + saved addresses
+// saved addresses (auto-reconnect management; populated only if peers were
+// previously saved — the address-adding UI itself is removed in code-first mode)
 // ---------------------------------------------------------------------------
-function renderAddresses() {
-  const box = document.getElementById('my-addresses');
-  if (!box) return;
-  const addrs = (state.self && state.self.addresses) || [];
-  const port = (state.self && state.self.port) || '';
-  box.innerHTML = '';
-  if (!addrs.length) {
-    const e = div('addr-empty');
-    e.textContent = 'No network address found (not connected to a network?).';
-    box.appendChild(e);
-    return;
-  }
-
-  // Hidden by default — only revealed when you click Show.
-  if (!addrRevealed) {
-    const reveal = document.createElement('button');
-    reveal.className = 'btn small ghost addr-reveal';
-    reveal.textContent = '👁  Show address';
-    reveal.onclick = () => {
-      addrRevealed = true;
-      renderAddresses();
-    };
-    box.appendChild(reveal);
-    return;
-  }
-
-  for (const a of addrs) {
-    const full = a.address + ':' + port;
-    const row = div('addr-row');
-    row.innerHTML = `
-      <div class="addr-main">
-        <div class="addr-ip">${escapeHtml(full)}${a.vpn ? '<span class="addr-tag">VPN</span>' : ''}</div>
-        <div class="addr-sub">${escapeHtml(a.label)}</div>
-      </div>
-      <button class="addr-btn">Copy</button>`;
-    const btn = row.querySelector('.addr-btn');
-    btn.onclick = () => {
-      api.copyText(full);
-      btn.textContent = 'Copied!';
-      setTimeout(() => (btn.textContent = 'Copy'), 1200);
-    };
-    box.appendChild(row);
-  }
-
-  const hide = document.createElement('button');
-  hide.className = 'link addr-hide';
-  hide.textContent = 'Hide address';
-  hide.onclick = () => {
-    addrRevealed = false;
-    renderAddresses();
-  };
-  box.appendChild(hide);
-}
-
 function renderSaved() {
   const field = document.getElementById('saved-field');
   const box = document.getElementById('saved-list');
@@ -703,36 +636,6 @@ function renderRing() {
     renderRing();
     api.callDecline();
   };
-}
-
-// ---------------------------------------------------------------------------
-// add-device modal
-// ---------------------------------------------------------------------------
-function openModal() {
-  document.getElementById('modal').classList.remove('hidden');
-  document.getElementById('add-error').textContent = '';
-  document.getElementById('add-host').value = '';
-  document.getElementById('add-port').value = '';
-  document.getElementById('add-host').focus();
-}
-function closeModal() {
-  document.getElementById('modal').classList.add('hidden');
-}
-async function submitAddDevice() {
-  const host = document.getElementById('add-host').value.trim();
-  const port = document.getElementById('add-port').value.trim();
-  const err = document.getElementById('add-error');
-  if (!host) {
-    err.textContent = 'Enter an IP address.';
-    return;
-  }
-  err.textContent = 'Connecting…';
-  const res = await api.addDevice(host, port);
-  if (res.ok) {
-    closeModal();
-  } else {
-    err.textContent = res.error || 'Could not reach that device.';
-  }
 }
 
 // ---------------------------------------------------------------------------

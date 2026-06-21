@@ -49,6 +49,11 @@ class MessageStore {
     return this.data[peerId] ? this.data[peerId].slice() : [];
   }
 
+  /** Every peer id that has stored history (used to rehydrate peers on launch). */
+  peerIds() {
+    return Object.keys(this.data);
+  }
+
   /** Map of peerId -> { last, unreadHint } for list badges (unread tracked in main). */
   lastByPeer() {
     const out = {};

@@ -43,7 +43,7 @@ class HomeScreen extends StatefulWidget {
   State<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
+class _HomeScreenState extends State<HomeScreen> with WidgetsBindingObserver {
   int _tab = 0;
   bool _inCall = false;
 
@@ -51,12 +51,20 @@ class _HomeScreenState extends State<HomeScreen> {
   void initState() {
     super.initState();
     service.addListener(_onChange);
+    WidgetsBinding.instance.addObserver(this);
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     service.removeListener(_onChange);
     super.dispose();
+  }
+
+  // Track foreground state so we only notify for messages you're not watching.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    service.inForeground = state == AppLifecycleState.resumed;
   }
 
   // open the call screen whenever a call becomes active (incoming or outgoing)
@@ -144,14 +152,11 @@ class _DevicesTab extends StatelessWidget {
       children: [
         const _ConnectByCode(),
         const SizedBox(height: 16),
-        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-          const Text('Nearby devices', style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.bold)),
-          TextButton(onPressed: () => _addByAddress(context), child: const Text('+ by address')),
-        ]),
+        const Text('Contacts', style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.bold)),
         if (peers.isEmpty)
           const Padding(
             padding: EdgeInsets.all(16),
-            child: Text('Looking for devices on your Wi-Fi…\nMake sure your PC has Filedrop open on the same network.',
+            child: Text('No contacts yet.\nAdd a friend by their code above.',
                 style: TextStyle(color: Colors.white54), textAlign: TextAlign.center),
           ),
         for (final peer in peers) _DeviceTile(peer: peer),
@@ -163,33 +168,6 @@ class _DevicesTab extends StatelessWidget {
     );
   }
 
-  void _addByAddress(BuildContext context) {
-    final host = TextEditingController();
-    final port = TextEditingController(text: '53319');
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Add device by address'),
-        content: Column(mainAxisSize: MainAxisSize.min, children: [
-          TextField(controller: host, decoration: const InputDecoration(hintText: 'PC IP, e.g. 192.168.1.42')),
-          TextField(controller: port, decoration: const InputDecoration(hintText: 'Port'), keyboardType: TextInputType.number),
-        ]),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
-          FilledButton(
-            onPressed: () async {
-              final err = await service.addByAddress(host.text.trim(), int.tryParse(port.text.trim()) ?? 53319);
-              if (ctx.mounted) Navigator.pop(ctx);
-              if (err != null && context.mounted) {
-                ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
-              }
-            },
-            child: const Text('Add'),
-          ),
-        ],
-      ),
-    );
-  }
 }
 
 class _ConnectByCode extends StatefulWidget {
@@ -451,15 +429,6 @@ class _SettingsTab extends StatefulWidget {
 }
 
 class _SettingsTabState extends State<_SettingsTab> {
-  bool _showAddr = false;
-  List<Map<String, String>> _addrs = const [];
-
-  @override
-  void initState() {
-    super.initState();
-    service.localAddresses().then((a) => mounted ? setState(() => _addrs = a) : null);
-  }
-
   @override
   Widget build(BuildContext context) {
     final nameCtrl = TextEditingController(text: service.self.name);
@@ -496,28 +465,6 @@ class _SettingsTabState extends State<_SettingsTab> {
             ),
           ),
         ),
-        const SizedBox(height: 20),
-        const Text('Your address (share so a PC can add you)', style: TextStyle(color: Colors.white60, fontSize: 12)),
-        const SizedBox(height: 6),
-        if (!_showAddr)
-          OutlinedButton.icon(
-            icon: const Icon(Icons.visibility_rounded),
-            label: const Text('Show address'),
-            onPressed: () => setState(() => _showAddr = true),
-          )
-        else ...[
-          for (final a in _addrs)
-            Card(
-              color: const Color(0xFF171A21),
-              child: ListTile(
-                dense: true,
-                title: Text('${a['address']}:${service.self.port}', style: const TextStyle(fontFamily: 'monospace')),
-                subtitle: Text(a['label'] ?? ''),
-              ),
-            ),
-          if (_addrs.isEmpty) const Text('No network address found.', style: TextStyle(color: Colors.white38)),
-          TextButton(onPressed: () => setState(() => _showAddr = false), child: const Text('Hide address')),
-        ],
         const SizedBox(height: 20),
         const Text('Received files', style: TextStyle(color: Colors.white60, fontSize: 12)),
         Text(service.downloadDir, style: const TextStyle(fontSize: 12, color: Colors.white70)),

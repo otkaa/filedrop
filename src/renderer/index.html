@@ -60,10 +60,9 @@
           </div>
 
           <div class="row between">
-            <h2>Nearby devices</h2>
+            <h2>Your devices</h2>
             <div class="row" style="gap: 12px">
               <button id="btn-add-code" class="link">+ by code</button>
-              <button id="btn-add-link" class="link">+ by address</button>
               <button id="btn-pick" class="btn small">Choose files…</button>
             </div>
           </div>
@@ -77,12 +76,12 @@
 
           <div id="devices" class="devices"></div>
           <div id="devices-empty" class="empty">
-            <div class="empty-emoji">📡</div>
-            <p>Looking for devices on your network…</p>
+            <div class="empty-emoji">🔑</div>
+            <p>No devices yet.</p>
             <p class="muted small">
-              Make sure the other device has Filedrop open and is on the same Wi-Fi/LAN.
+              Connect to a friend with <strong>+ by code</strong> using the 8-character code from
+              their <em>Settings → Your code</em>. Share your own code so they can reach you too.
             </p>
-            <button id="btn-add" class="link">Add a device by address</button>
           </div>
 
           <!-- transfers -->
@@ -134,12 +133,6 @@
               <button id="relay-code-copy" class="addr-btn">Copy</button>
             </div>
           </div>
-        </div>
-
-        <!-- This device's address(es) — share so a friend can add you -->
-        <div class="field">
-          <span>Your address <span class="muted small">(share this so others can add you)</span></span>
-          <div id="my-addresses" class="addr-list"></div>
         </div>
 
         <div class="field">
@@ -199,25 +192,6 @@
         <button id="btn-quit" class="btn danger wide">Quit Filedrop</button>
       </section>
     </main>
-
-    <!-- Add-device modal -->
-    <div id="modal" class="modal hidden">
-      <div class="modal-card">
-        <h3>Add device by address</h3>
-        <p class="muted small">
-          Connect to a device by its address — for stealth devices, or <strong>over a VPN</strong>
-          (where auto-discovery doesn't work). The other person can read their address from
-          <em>Settings → Your address</em>. Saved addresses reconnect automatically.
-        </p>
-        <input id="add-host" type="text" placeholder="192.168.1.42" />
-        <input id="add-port" type="text" placeholder="Port (optional)" />
-        <div id="add-error" class="error small"></div>
-        <div class="modal-actions">
-          <button id="add-cancel" class="btn ghost">Cancel</button>
-          <button id="add-ok" class="btn">Add</button>
-        </div>
-      </div>
-    </div>
 
     <script src="renderer.js"></script>
   </body>

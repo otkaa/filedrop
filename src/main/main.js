@@ -20,7 +20,7 @@ const {
   Notification,
 } = require('electron');
 
-const { Settings, genRelayCode } = require('./settings');
+const { Settings, genRelayCode, RELAY_ALPHABET } = require('./settings');
 const certs = require('./certs');
 const { Discovery } = require('./discovery');
 const { ReceiveServer } = require('./server');
@@ -83,6 +83,16 @@ if (!app.requestSingleInstanceLock()) {
 // Init
 // ---------------------------------------------------------------------------
 async function init() {
+  // On Windows, desktop notifications silently fail to appear unless the app's
+  // AppUserModelID is set to match the installed shortcut's AUMID. Without this,
+  // `new Notification(...).show()` is a no-op for chat/call/file alerts. Must be
+  // set before any Notification is constructed.
+  if (process.platform === 'win32') {
+    try {
+      app.setAppUserModelId('com.kavelashvili.filedrop');
+    } catch (_) {}
+  }
+
   const userData = app.getPath('userData');
 
   settings = new Settings(path.join(userData, 'settings.json'), {
@@ -97,6 +107,9 @@ async function init() {
   const tls = certs.loadOrCreate(userData, settings.get('deviceName'));
 
   messages = new MessageStore(path.join(userData, 'messages.json'));
+  // recreate code-peer rows for conversations that persisted across a restart,
+  // so they show in the Devices list on launch (history is keyed by code)
+  rehydrateRelayPeers();
 
   self = {
     id: settings.get('deviceId'),
@@ -674,6 +687,31 @@ function ensureRelayPeer(code, name) {
   return peer;
 }
 
+/** True if a stored peer id looks like an 8-char relay code (not a LAN UUID). */
+function looksRelayCode(id) {
+  if (typeof id !== 'string' || id.length !== 8) return false;
+  for (const ch of id) if (!RELAY_ALPHABET.includes(ch)) return false;
+  return true;
+}
+
+/**
+ * On launch, recreate relay-only peers for any code we've previously chatted
+ * with. Relay peers are otherwise only created when a friend messages or you
+ * add them by code, so without this a saved code-conversation would vanish from
+ * the Devices list after a restart (its history persists, but had no peer row).
+ */
+function rehydrateRelayPeers() {
+  if (!messages) return;
+  const myCode = normCode(settings.get('relayCode'));
+  for (const id of messages.peerIds()) {
+    if (!looksRelayCode(id)) continue; // LAN/manual peers reconnect their own way
+    if (id === myCode) continue;
+    if (!relayPeers.has(id)) {
+      relayPeers.set(id, { id, name: id, relay: true, isRelayOnly: true, relayCode: id });
+    }
+  }
+}
+
 /** Incoming relay chat -> the same path the HTTPS server uses. */
 function relayOnIncomingMessage(m) {
   const payload = m.payload || {};
@@ -731,6 +769,11 @@ async function addByCode(rawCode) {
   return { ok: true, online: !!(res && res.online), name: res && res.name };
 }
 
+/**
+ * One incoming chat message. This is the SINGLE path for both LAN (HTTPS server)
+ * and relay/code peers — relayOnIncomingMessage() funnels into here — so the
+ * notification behaviour is identical for both transports.
+ */
 function onIncomingMessage(m) {
   messages.add(m.peerId, { dir: 'in', text: m.text, ts: m.ts });
 
@@ -740,19 +783,41 @@ function onIncomingMessage(m) {
     unread.set(m.peerId, 0);
   } else {
     unread.set(m.peerId, (unread.get(m.peerId) || 0) + 1);
-    // throttle notifications: first unread, or at most once per 5s per peer
-    const now = Date.now();
-    const prev = lastNotify.get(m.peerId) || 0;
-    if (Notification.isSupported() && now - prev > 5000) {
-      lastNotify.set(m.peerId, now);
-      const n = new Notification({ title: m.peerName, body: m.text.slice(0, 120), icon: fileIcon() });
-      n.on('click', () => showWindow());
-      n.show();
-    }
+    notifyChat(m.peerId, m.peerName, m.text);
   }
 
   if (win && !win.isDestroyed()) win.webContents.send('message', { peerId: m.peerId, dir: 'in', text: m.text, ts: m.ts });
   pushState();
+}
+
+/**
+ * Show an OS notification for a received chat message (title = sender, body =
+ * text). Throttled to at most once per 5s per peer so message bursts don't spam.
+ * Clicking it shows the window AND opens that conversation in the renderer.
+ */
+function notifyChat(peerId, peerName, text) {
+  if (!Notification.isSupported()) return;
+  const now = Date.now();
+  const prev = lastNotify.get(peerId) || 0;
+  if (now - prev <= 5000) return;
+  lastNotify.set(peerId, now);
+  try {
+    const n = new Notification({
+      title: peerName || 'New message',
+      body: String(text || '').slice(0, 120),
+      icon: fileIcon(),
+    });
+    n.on('click', () => openConvoFromNotification(peerId));
+    n.show();
+  } catch (_) {
+    // notifications are best-effort; never let a failure break message handling
+  }
+}
+
+/** Focus the panel and ask the renderer to open the given conversation. */
+function openConvoFromNotification(peerId) {
+  showWindow();
+  if (win && !win.isDestroyed()) win.webContents.send('open-convo', peerId);
 }
 
 async function sendMessage(deviceId, text) {
@@ -1142,11 +1207,17 @@ function upsertTransfer(u) {
 
 function buildState() {
   const hideIps = settings.get('hideIps');
-  const discovered = discovery ? discovery.getPeers() : [];
-  const seen = new Set(discovered.map((p) => p.id));
-  const merged = discovered.concat(
-    Array.from(manualPeers.values()).filter((p) => !seen.has(p.id))
-  );
+  // CODE-FIRST: the Devices list shows ONLY code/relay peers and manually-added
+  // peers. LAN multicast-discovered peers are intentionally excluded (the
+  // discovery service may still run for send/lookup, but its peers never surface
+  // in the UI). Manual + relay peers are keyed by id/code and never collide.
+  const seen = new Set();
+  const merged = [];
+  for (const p of manualPeers.values()) {
+    if (seen.has(p.id)) continue;
+    seen.add(p.id);
+    merged.push(p);
+  }
   // relay-only peers (added by code, or auto-created when a friend messages
   // first). Keyed by code, never collide with LAN device UUIDs.
   for (const p of relayPeers.values()) if (!seen.has(p.id)) merged.push(p);

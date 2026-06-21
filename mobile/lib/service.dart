@@ -6,8 +6,10 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 import 'call.dart';
+import 'call_service.dart';
 import 'certs.dart';
 import 'discovery.dart';
 import 'models.dart';
@@ -139,7 +141,9 @@ class FiledropService extends ChangeNotifier {
       _discovery = Discovery(self: self, onMessage: _onDiscovery);
       await _discovery!.start();
 
+      _loadRelayPeers(); // restore code contacts before their chats load
       _loadMessages();
+      Permission.notification.request().ignore(); // so chat notifications can show
       Timer.periodic(const Duration(seconds: 5), (_) => _prune());
 
       started = true;
@@ -207,11 +211,17 @@ class FiledropService extends ChangeNotifier {
   }
 
   // --- chat ---
+  bool inForeground = true; // set by the UI's lifecycle observer
+
   void _onIncomingMessage(String fromId, String fromName, String text, int ts) {
     (messages[fromId] ??= []).add(ChatMessage(mine: false, text: text, ts: ts));
     if (activeConvo != fromId) unread[fromId] = (unread[fromId] ?? 0) + 1;
-    // make sure the peer shows up even if discovery hasn't seen them
     _saveMessages();
+    // Notify unless you're already looking at this conversation in the foreground.
+    if (!inForeground || activeConvo != fromId) {
+      final name = peers[fromId]?.name ?? fromName;
+      showMessageNotification(name, text, fromId.hashCode & 0x7fffffff);
+    }
     notifyListeners();
   }
 
@@ -222,7 +232,10 @@ class FiledropService extends ChangeNotifier {
     final c = RelayClient.norm(code);
     final existing = peers[c];
     if (existing != null) {
-      if (fromName != null && fromName.isNotEmpty && fromName != c) existing.name = fromName;
+      if (fromName != null && fromName.isNotEmpty && fromName != c) {
+        existing.name = fromName;
+        _saveRelayPeers();
+      }
       return existing;
     }
     final peer = Peer(
@@ -235,6 +248,7 @@ class FiledropService extends ChangeNotifier {
       manual: true,
     );
     peers[c] = peer;
+    _saveRelayPeers();
     notifyListeners();
     return peer;
   }
@@ -480,6 +494,7 @@ class FiledropService extends ChangeNotifier {
       if (name != null && name.isNotEmpty) existing.name = name;
       existing.isRelayOnly = true;
       existing.relayCode = code;
+      _saveRelayPeers();
       notifyListeners();
       return null;
     }
@@ -492,6 +507,7 @@ class FiledropService extends ChangeNotifier {
       relayCode: code,
       manual: true,
     );
+    _saveRelayPeers();
     notifyListeners();
     return null;
   }
@@ -533,6 +549,37 @@ class FiledropService extends ChangeNotifier {
     return out;
   }
 
+  // --- persistence of code (relay) peers, so contacts + their chat history
+  // survive an app restart (LAN peers are transient and re-discovered). ---
+  void _saveRelayPeers() {
+    final list = peers.values
+        .where((p) => p.isRelayOnly && p.relayCode != null)
+        .map((p) => {'code': p.relayCode, 'name': p.name})
+        .toList();
+    _prefs.setString('relayPeers', jsonEncode(list));
+  }
+
+  void _loadRelayPeers() {
+    final raw = _prefs.getString('relayPeers');
+    if (raw == null) return;
+    try {
+      for (final e in (jsonDecode(raw) as List)) {
+        final code = RelayClient.norm('${(e as Map)['code']}');
+        if (code.length != 8 || peers.containsKey(code)) continue;
+        final nm = e['name'];
+        peers[code] = Peer(
+          id: code,
+          name: (nm is String && nm.isNotEmpty) ? nm : formatRelayCode(code),
+          ip: '',
+          port: 0,
+          isRelayOnly: true,
+          relayCode: code,
+          manual: true,
+        );
+      }
+    } catch (_) {}
+  }
+
   // --- persistence of chat ---
   void _loadMessages() {
     final raw = _prefs.getString('messages');
@@ -554,6 +601,9 @@ class FiledropService extends ChangeNotifier {
     });
   }
 
-  List<Peer> get sortedPeers => peers.values.toList()..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  // Only code (relay) contacts are shown — we connect by code now, so
+  // same-network LAN-discovered devices are no longer auto-listed.
+  List<Peer> get sortedPeers => peers.values.where((p) => p.isRelayOnly).toList()
+    ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
   List<Transfer> get sortedTransfers => transfers.values.toList().reversed.toList();
 }

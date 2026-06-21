@@ -1,5 +1,5 @@
 {
-  "version": "1.4.4",
+  "version": "1.4.5",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Fixes the PC's screen share (and camera) not showing on the phone."
+  "notes": "Code contacts + chats now persist across restarts, message notifications, only code contacts shown (no more same-network list), address UI removed."
 }
