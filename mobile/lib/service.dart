@@ -12,8 +12,8 @@ import 'discovery.dart';
 import 'models.dart';
 import 'sender.dart' as net;
 import 'server.dart';
+import 'updater.dart' show kAppVersion;
 
-const kAppVersion = '1.0.0';
 const _peerTimeout = 12000;
 
 /// Single app-wide service: identity, discovery, server, peers, transfers, chat.

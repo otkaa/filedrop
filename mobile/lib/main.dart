@@ -5,6 +5,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'models.dart';
 import 'service.dart';
+import 'updater.dart';
 
 final service = FiledropService.instance;
 
@@ -421,7 +422,52 @@ class _SettingsTabState extends State<_SettingsTab> {
         const Text('Received files', style: TextStyle(color: Colors.white60, fontSize: 12)),
         Text(service.downloadDir, style: const TextStyle(fontSize: 12, color: Colors.white70)),
         const SizedBox(height: 20),
-        Text('Filedrop v$kAppVersion', style: const TextStyle(color: Colors.white38, fontSize: 12)),
+        const Text('Updates', style: TextStyle(color: Colors.white60, fontSize: 12)),
+        const SizedBox(height: 6),
+        ListenableBuilder(
+          listenable: updater,
+          builder: (context, _) {
+            final u = updater;
+            String status;
+            switch (u.state) {
+              case 'checking':
+                status = 'Checking…';
+                break;
+              case 'available':
+                status = 'Update available: v${u.latestVersion}';
+                break;
+              case 'downloading':
+                status = 'Downloading… ${u.percent}%';
+                break;
+              case 'none':
+                status = 'Up to date · v$kAppVersion';
+                break;
+              case 'error':
+                status = '${u.error ?? 'Update check failed'} · v$kAppVersion';
+                break;
+              default:
+                status = 'Filedrop v$kAppVersion';
+            }
+            final busy = u.state == 'checking' || u.state == 'downloading';
+            return Card(
+              color: const Color(0xFF171A21),
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  Row(children: [
+                    Expanded(child: Text(status)),
+                    if (!busy)
+                      u.state == 'available'
+                          ? FilledButton(onPressed: () => u.downloadAndInstall(), child: const Text('Update now'))
+                          : OutlinedButton(onPressed: () => u.check(), child: const Text('Check')),
+                  ]),
+                  if (u.state == 'downloading')
+                    Padding(padding: const EdgeInsets.only(top: 8), child: LinearProgressIndicator(value: u.percent / 100)),
+                ]),
+              ),
+            );
+          },
+        ),
       ],
     );
   }

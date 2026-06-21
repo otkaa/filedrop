@@ -18,6 +18,7 @@ dependencies:
   file_picker: ^8.1.2 # pick files to send
   permission_handler: ^11.3.1 # runtime permissions
   flutter_webrtc: ^0.12.5 # voice/video calls
+  open_filex: ^4.5.0 # launch the APK installer for in-app updates
   uuid: ^4.4.2
 
 dev_dependencies:
