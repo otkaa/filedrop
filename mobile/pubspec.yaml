@@ -3,7 +3,7 @@ description: Filedrop — LAN file transfer, chat & calls (Android)
 publish_to: "none"
 # versionName + versionCode. BUMP THE +N (versionCode) every release or Android
 # refuses to install the update over the existing app.
-version: 1.4.3+7
+version: 1.4.4+8
 
 environment:
   sdk: ">=3.3.0 <4.0.0"

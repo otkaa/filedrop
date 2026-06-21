@@ -78,7 +78,7 @@ class CallSession extends ChangeNotifier {
       ],
     });
 
-    _pc!.onTrack = (RTCTrackEvent e) {
+    _pc!.onTrack = (RTCTrackEvent e) async {
       final track = e.track;
       if (track.kind == 'audio') {
         // remote audio plays automatically; keep a ref so Deafen can mute it
@@ -86,11 +86,15 @@ class CallSession extends ChangeNotifier {
         track.enabled = !deafened;
         return;
       }
-      final stream = e.streams.isNotEmpty ? e.streams.first : null;
-      if (stream == null) return;
+      // Our transceivers are added with NO MediaStream, so the SDP carries no
+      // msid and e.streams arrives EMPTY — which used to make us drop the track
+      // (this is why the PC's camera/screen never showed here). Wrap the bare
+      // track in a local stream ourselves, exactly like the desktop does with
+      // `new MediaStream([track])`.
+      MediaStream? stream = e.streams.isNotEmpty ? e.streams.first : null;
+      stream ??= await _wrapTrack(track);
       // Distinguish the two remote video m-lines by their transceiver mid
-      // (audio=0, camera=1, screen=2 — the order we add them) rather than by
-      // arrival order, which is unreliable and swapped camera/screen.
+      // (audio=0, camera=1, screen=2 — the order we add them).
       final mid = e.transceiver?.mid;
       final isScreen = mid == '2' || (mid == null && _remoteVideoCount > 0);
       _remoteVideoCount++;
@@ -356,6 +360,15 @@ class CallSession extends ChangeNotifier {
     });
     await c.future;
     timer.cancel();
+  }
+
+  /// Wrap a bare remote track (no msid → empty e.streams) in a fresh local
+  /// MediaStream so the renderer has a stream to show. flutter_webrtc's native
+  /// layer resolves the remote track by id and renders it.
+  Future<MediaStream> _wrapTrack(MediaStreamTrack track) async {
+    final ms = await createLocalMediaStream('remote_${track.id}');
+    await ms.addTrack(track);
+    return ms;
   }
 
   void _onConnected() {

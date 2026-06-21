@@ -1,5 +1,5 @@
 {
-  "version": "1.4.3",
+  "version": "1.4.4",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Switch between front/back camera, front camera no longer mirrored for the other person, and a one-tap 'run in background' so calls survive leaving the app."
+  "notes": "Fixes the PC's screen share (and camera) not showing on the phone."
 }
