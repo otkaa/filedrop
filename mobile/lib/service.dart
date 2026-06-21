@@ -258,8 +258,11 @@ class FiledropService extends ChangeNotifier {
     (messages[fromId] ??= []).add(ChatMessage(mine: false, text: text, ts: ts));
     if (activeConvo != fromId) unread[fromId] = (unread[fromId] ?? 0) + 1;
     _saveMessages();
-    // Notify unless you're already looking at this conversation in the foreground.
-    if (!inForeground || activeConvo != fromId) {
+    // Post the in-app notification ONLY while we're in the foreground (and not
+    // already viewing this chat). When backgrounded or killed the relay's FCM push
+    // is the notification source — the system shows it whenever the app isn't
+    // foreground, so gating here to foreground-only avoids a double notification.
+    if (inForeground && activeConvo != fromId) {
       final name = peers[fromId]?.name ?? fromName;
       showMessageNotification(name, text, fromId.hashCode & 0x7fffffff);
     }
