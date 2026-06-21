@@ -1,6 +1,6 @@
 appId: com.kavelashvili.filedrop
 productName: Filedrop
-copyright: Copyright © 2026 v.kavelashvili
+copyright: Copyright © 2026 otkaa
 
 directories:
   output: dist
@@ -45,7 +45,7 @@ linux:
   # maintainer (with email) + homepage are REQUIRED by electron-builder's fpm
   # pipeline (pacman); without them `electron-builder --linux` throws and no
   # Linux artifact is produced.
-  maintainer: "v.kavelashvili <v.kavelashvili@gmail.com>"
+  maintainer: "otkaa <294733735+otkaa@users.noreply.github.com>"
   synopsis: Send files across your LAN, no cloud
   description: Tray-resident peer-to-peer file transfer for your local network.
   desktop:
