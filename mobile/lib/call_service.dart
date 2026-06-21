@@ -5,9 +5,9 @@ import 'package:flutter/services.dart';
 /// No-op on platforms without the channel.
 const _ch = MethodChannel('filedrop/call_service');
 
-Future<void> startCallService({String title = 'Filedrop', String text = 'In call'}) async {
+Future<void> startCallService({String title = 'Filedrop', String text = 'In call', bool screen = false}) async {
   try {
-    await _ch.invokeMethod('start', {'title': title, 'text': text});
+    await _ch.invokeMethod('start', {'title': title, 'text': text, 'screen': screen});
   } catch (_) {}
 }
 

@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Filedrop Ring</title>
+  </head>
+  <body>
+    <!--
+      Hidden (show:false) window whose only job is to play a looping ring tone
+      for an INCOMING call without putting any visible UI on screen or stealing
+      focus. The main process toggles the tone via executeJavaScript() calling
+      window.__ringStart() / window.__ringStop(). No preload, no node access —
+      this is a self-contained WebAudio oscillator so we don't need a sound asset.
+    -->
+    <script>
+      (function () {
+        'use strict';
+        var ctx = null;
+        var timer = null;
+        var playing = false;
+
+        // One "ring" = two short beeps, then a gap — a classic telephone cadence.
+        function blip(at, freq, dur) {
+          var osc = ctx.createOscillator();
+          var gain = ctx.createGain();
+          osc.type = 'sine';
+          osc.frequency.value = freq;
+          // soft attack/decay so it isn't a harsh click
+          gain.gain.setValueAtTime(0.0001, at);
+          gain.gain.exponentialRampToValueAtTime(0.25, at + 0.04);
+          gain.gain.setValueAtTime(0.25, at + dur - 0.06);
+          gain.gain.exponentialRampToValueAtTime(0.0001, at + dur);
+          osc.connect(gain).connect(ctx.destination);
+          osc.start(at);
+          osc.stop(at + dur + 0.02);
+        }
+
+        function ringOnce() {
+          if (!ctx || !playing) return;
+          var t = ctx.currentTime;
+          blip(t + 0.0, 480, 0.4);
+          blip(t + 0.55, 620, 0.4);
+        }
+
+        window.__ringStart = function () {
+          try {
+            if (playing) return;
+            if (!ctx) ctx = new (window.AudioContext || window.webkitAudioContext)();
+            if (ctx.state === 'suspended') ctx.resume();
+            playing = true;
+            ringOnce();
+            // repeat the two-beep cadence every ~2s for a continuous ring
+            timer = setInterval(ringOnce, 2000);
+          } catch (e) {}
+        };
+
+        window.__ringStop = function () {
+          playing = false;
+          if (timer) {
+            clearInterval(timer);
+            timer = null;
+          }
+          // leave the AudioContext alive (cheap) so a subsequent ring starts fast
+        };
+      })();
+    </script>
+  </body>
+</html>

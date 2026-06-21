@@ -61,6 +61,8 @@ let pendingCallInit = null; // payload the call window pulls on load
 let pendingIncomingTimer = null; // auto-expire an unanswered incoming ring
 let activeCallTimer = null; // caller-side answer timeout
 const lastRing = new Map(); // peerId -> ts of last incoming ring (throttle)
+let ringWindow = null; // hidden, focus-less window that plays the incoming ring tone
+let incomingNotification = null; // the click-to-answer OS notification for the current ring
 
 let pushTimer = null;
 const startedHidden = process.argv.includes('--hidden');
@@ -894,7 +896,68 @@ function clearPendingIncoming(notifyRenderer) {
     pendingIncomingTimer = null;
   }
   pendingIncoming = null;
+  stopIncomingRing(); // silence the tone + dismiss the click-to-answer notification
   if (notifyRenderer && win && !win.isDestroyed()) win.webContents.send('call-ring', null);
+}
+
+// ---------------------------------------------------------------------------
+// Incoming ring (focus-less): a hidden window plays a looping tone, and an OS
+// notification (click to answer) is shown — we never raise/focus a window for
+// an incoming call so a fullscreen game isn't disrupted.
+// ---------------------------------------------------------------------------
+/**
+ * Start the looping ring tone in a hidden (show:false) BrowserWindow. The window
+ * is never shown or focused; it exists only to host a WebAudio oscillator. Safe
+ * to call repeatedly — it reuses the window and just (re)starts the tone.
+ */
+function startIncomingRing() {
+  try {
+    if (!ringWindow || ringWindow.isDestroyed()) {
+      ringWindow = new BrowserWindow({
+        show: false,
+        focusable: false,
+        skipTaskbar: true,
+        width: 1,
+        height: 1,
+        webPreferences: {
+          // self-contained inline WebAudio page; no preload / node access needed
+          contextIsolation: true,
+          nodeIntegration: false,
+          sandbox: false,
+        },
+      });
+      ringWindow.on('closed', () => {
+        ringWindow = null;
+      });
+      ringWindow.webContents.once('did-finish-load', () => {
+        // kick off the tone once the page (and its __ringStart) is ready
+        if (pendingIncoming) playRingTone();
+      });
+      ringWindow.loadFile(path.join(__dirname, '..', 'renderer', 'ring.html'));
+      return; // playRingTone() fires from did-finish-load above
+    }
+    playRingTone();
+  } catch (_) {
+    // ring audio is best-effort; never let it break call handling
+  }
+}
+
+function playRingTone() {
+  if (!ringWindow || ringWindow.isDestroyed()) return;
+  ringWindow.webContents.executeJavaScript('window.__ringStart && window.__ringStart()').catch(() => {});
+}
+
+/** Stop the ring tone and dismiss the click-to-answer notification, if any. */
+function stopIncomingRing() {
+  if (ringWindow && !ringWindow.isDestroyed()) {
+    ringWindow.webContents.executeJavaScript('window.__ringStop && window.__ringStop()').catch(() => {});
+  }
+  if (incomingNotification) {
+    try {
+      incomingNotification.close();
+    } catch (_) {}
+    incomingNotification = null;
+  }
 }
 
 function onIncomingSignal(sig) {
@@ -927,14 +990,28 @@ function onIncomingSignal(sig) {
 
     pendingIncoming = { callId: sig.callId, peer, offerSdp: sig.sdp };
     pendingIncomingTimer = setTimeout(() => clearPendingIncoming(true), 60000);
-    showWindow();
+
+    // INCOMING calls must NOT raise or focus any window (a fullscreen game would
+    // be disrupted). Instead: play a hidden looping ring tone + show a
+    // click-to-answer OS notification. The in-app ring banner still updates IF
+    // the panel happens to already be open, but we never force it open.
+    startIncomingRing();
     if (win && !win.isDestroyed()) {
       win.webContents.send('call-ring', { callId: sig.callId, peerId: sig.peerId, peerName: sig.peerName });
     }
     if (Notification.isSupported() && !spammy) {
-      const n = new Notification({ title: 'Incoming call', body: `${sig.peerName} is calling…`, icon: fileIcon() });
-      n.on('click', () => showWindow());
+      const callerName = sig.peerName || 'Someone';
+      const n = new Notification({
+        title: `${callerName} is calling`,
+        body: 'Click to answer · Filedrop',
+        icon: fileIcon(),
+      });
+      // Clicking the notification ANSWERS the call: run the same accept path the
+      // UI's Accept button triggers (opens + focuses the call window) — only now
+      // does a window appear, because the user chose to take the call.
+      n.on('click', () => acceptIncoming());
       n.show();
+      incomingNotification = n;
     }
     return;
   }
@@ -1351,6 +1428,7 @@ function doQuit() {
     }
     activeCall = null;
     if (callWindow && !callWindow.isDestroyed()) callWindow.destroy();
+    if (ringWindow && !ringWindow.isDestroyed()) ringWindow.destroy();
     discovery && discovery.stop();
     server && server.stop();
     relay && relay.stop();

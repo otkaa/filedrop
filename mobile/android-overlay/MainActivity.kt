@@ -40,6 +40,7 @@ class MainActivity : FlutterActivity() {
                         val i = Intent(this, CallForegroundService::class.java)
                         i.putExtra("title", call.argument<String>("title") ?: "Filedrop")
                         i.putExtra("text", call.argument<String>("text") ?: "In call")
+                        i.putExtra("screen", call.argument<Boolean>("screen") ?: false)
                         ContextCompat.startForegroundService(this, i)
                         result.success(null)
                     }

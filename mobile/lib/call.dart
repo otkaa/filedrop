@@ -301,8 +301,16 @@ class CallSession extends ChangeNotifier {
       localScreen = null;
       screenOn = false;
       if (_screenTx != null) await _screenTx!.sender.replaceTrack(null);
+      await startCallService(text: 'In call', screen: false); // back to mic-only FGS
     } else {
       try {
+        // Android 14 crashes the call unless we do this exact order:
+        //   1) get screen-capture consent, 2) have a mediaProjection foreground
+        //   service RUNNING, 3) only then call getDisplayMedia.
+        final granted = await Helper.requestCapturePermission();
+        if (!granted) return;
+        await startCallService(text: 'Sharing screen', screen: true);
+        await Future.delayed(const Duration(milliseconds: 350));
         _screenStream = await navigator.mediaDevices.getDisplayMedia({
           'video': {'frameRate': {'ideal': 30}},
           'audio': false,
@@ -319,6 +327,7 @@ class CallSession extends ChangeNotifier {
           if (screenOn) toggleScreen();
         };
       } catch (_) {
+        await startCallService(text: 'In call', screen: false); // revert FGS on failure
         return;
       }
     }

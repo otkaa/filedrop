@@ -1,5 +1,5 @@
 {
-  "version": "1.4.6",
+  "version": "1.4.7",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Screen share and camera now actually render on the phone (attach a real stream id to outgoing video so Android can display it)."
+  "notes": "Screen sharing from the phone no longer crashes the call (Android 14 media-projection foreground service)."
 }

@@ -30,6 +30,9 @@ class CallForegroundService : Service() {
         createChannel()
         val title = intent?.getStringExtra("title") ?: "Filedrop"
         val text = intent?.getStringExtra("text") ?: "In call"
+        // While screen-sharing we must run as a mediaProjection-type FGS, or
+        // Android 14 throws a SecurityException and the call crashes.
+        val screen = intent?.getBooleanExtra("screen", false) ?: false
 
         val launch = packageManager.getLaunchIntentForPackage(packageName)
         val pi = if (launch != null) {
@@ -53,7 +56,9 @@ class CallForegroundService : Service() {
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                startForeground(NOTIF_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
+                var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+                if (screen) type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                startForeground(NOTIF_ID, notification, type)
             } else {
                 startForeground(NOTIF_ID, notification)
             }
