@@ -3,7 +3,7 @@ description: Filedrop — LAN file transfer, chat & calls (Android)
 publish_to: "none"
 # versionName + versionCode. BUMP THE +N (versionCode) every release or Android
 # refuses to install the update over the existing app.
-version: 1.5.1+13
+version: 1.6.0+14
 
 environment:
   sdk: ">=3.3.0 <4.0.0"
@@ -22,6 +22,7 @@ dependencies:
   flutter_webrtc: ^0.12.5 # voice/video calls
   open_filex: ^4.5.0 # launch the APK installer for in-app updates
   uuid: ^4.4.2
+  flutter_callkit_incoming: ^2.5.0 # native ringing call screen (lock screen + ring + vibrate)
 
 dev_dependencies:
   flutter_lints: ^4.0.0

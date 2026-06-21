@@ -6,6 +6,8 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:uuid/uuid.dart';
 import 'call.dart';
@@ -142,12 +144,22 @@ class FiledropService extends ChangeNotifier {
       // fire-and-forget; the client auto-reconnects with backoff on its own
       _relay!.connect();
 
-      // Answer/Decline tapped in the incoming-call notification routes here.
-      setCallActionHandler((action, callId) {
-        if (action == 'accept') {
-          acceptCall();
-        } else if (action == 'decline') {
-          declineCall();
+      // Native CallKit-style ringing screen handles incoming calls: it wakes /
+      // lights up the (locked) screen, rings, and vibrates per the ringer mode,
+      // and surfaces Answer/Decline. The user's choice comes back as an event.
+      FlutterCallkitIncoming.onEvent.listen((event) {
+        if (event == null) return;
+        switch (event.event) {
+          case Event.actionCallAccept:
+            acceptCall();
+            break;
+          case Event.actionCallDecline:
+          case Event.actionCallTimeout:
+          case Event.actionCallEnded:
+            declineCall();
+            break;
+          default:
+            break;
         }
       });
 
@@ -456,11 +468,7 @@ class FiledropService extends ChangeNotifier {
       }
       if (peer == null) return;
       pendingIncomingCall = {'callId': callId, 'peer': peer, 'offerSdp': sig['sdp'], 'peerName': sig['peerName']};
-      // If the app isn't open in front of you, ring with an Answer/Decline
-      // notification. (When it's open, the in-app ring banner already shows.)
-      if (!inForeground) {
-        showIncomingCallNotification(callId ?? '', '${sig['peerName'] ?? peer.name}');
-      }
+      _showIncomingCallUi(callId ?? _uuid.v4(), '${sig['peerName'] ?? peer.name}');
       notifyListeners();
       return;
     }
@@ -470,7 +478,7 @@ class FiledropService extends ChangeNotifier {
         pendingIncomingCall != null &&
         pendingIncomingCall!['callId'] == callId) {
       pendingIncomingCall = null;
-      cancelIncomingCallNotification();
+      FlutterCallkitIncoming.endAllCalls();
       notifyListeners();
       return;
     }
@@ -478,6 +486,32 @@ class FiledropService extends ChangeNotifier {
     if (activeCall == null || activeCall!.callId != callId) return;
     if (activeCall!.peer.id != sig['peerId']) return;
     activeCall!.handleSignal(kind, sig['sdp'] as String?);
+  }
+
+  // Show the native ringing call screen (lock-screen wake + ringtone + vibration
+  // handled by the OS). Answer/Decline come back via FlutterCallkitIncoming.onEvent.
+  Future<void> _showIncomingCallUi(String callId, String name) async {
+    try {
+      await FlutterCallkitIncoming.showCallkitIncoming(CallKitParams(
+        id: callId,
+        nameCaller: name,
+        appName: 'Filedrop',
+        handle: name,
+        type: 0, // audio call
+        textAccept: 'Answer',
+        textDecline: 'Decline',
+        android: const AndroidParams(
+          isCustomNotification: true,
+          isShowLogo: false,
+          isShowCallID: false,
+          isShowFullLockedScreen: true, // ring screen over the lock screen
+          ringtonePath: 'system_ringtone_default',
+          backgroundColor: '#171A21',
+          actionColor: '#4F7CFF',
+        ),
+        ios: const IOSParams(handleType: 'generic', supportsVideo: false),
+      ));
+    } catch (_) {}
   }
 
   Peer? _resolvePeer(Map<String, dynamic> sig) {
@@ -532,7 +566,7 @@ class FiledropService extends ChangeNotifier {
     final inc = pendingIncomingCall;
     if (inc == null) return;
     pendingIncomingCall = null;
-    cancelIncomingCallNotification();
+    FlutterCallkitIncoming.endAllCalls();
     _beginCall(inc['callId'] as String, inc['peer'] as Peer, isCaller: false, offerSdp: inc['offerSdp'] as String?);
   }
 
@@ -540,7 +574,7 @@ class FiledropService extends ChangeNotifier {
     final inc = pendingIncomingCall;
     if (inc == null) return;
     pendingIncomingCall = null;
-    cancelIncomingCallNotification();
+    FlutterCallkitIncoming.endAllCalls();
     _postSignal(inc['peer'] as Peer, 'decline', inc['callId'] as String?, null);
     notifyListeners();
   }
