@@ -20,6 +20,11 @@ const PORT = process.env.PORT || 8080;
 /** code (UPPERCASE) -> { ws, deviceId, name, fingerprint, fcmToken } */
 const peers = new Map();
 
+// FCM push tokens kept PER CODE, persisting across disconnects — so we can push
+// to a code whose app is fully CLOSED (its live `peers` entry is long gone).
+/** code (UPPERCASE) -> fcmToken */
+const fcmTokens = new Map();
+
 // Missed chat messages for OFFLINE codes, replayed on reconnect.
 /** code (UPPERCASE) -> Array<{ from, fromName, payload }> (cap 50, FIFO) */
 const offlineQueue = new Map();
@@ -86,9 +91,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     // `fcm` = is push enabled (service account loaded); `tokens` = how many of
     // the online codes registered an FCM token. Diagnostics, no secrets.
-    let tokens = 0;
-    for (const p of peers.values()) if (p.fcmToken) tokens++;
-    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens, fcmError }));
+    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens: fcmTokens.size, fcmError }));
     return;
   }
   res.writeHead(200, { 'content-type': 'text/plain' });
@@ -127,6 +130,8 @@ wss.on('connection', (ws) => {
           fingerprint: msg.fingerprint || null,
           fcmToken: msg.fcmToken || null,
         });
+        // Remember the push token across disconnects so a CLOSED app can be woken.
+        if (msg.fcmToken) fcmTokens.set(code, msg.fcmToken);
         send(ws, { type: 'registered', code, online: peers.size });
         // Deliver any chat messages that arrived while this code was offline.
         const queued = offlineQueue.get(code);
@@ -148,7 +153,9 @@ wss.on('connection', (ws) => {
           // Target's socket is OFFLINE. Tell the sender, and — if we know the
           // target's FCM token — try to wake the closed app via push.
           send(ws, { type: 'peer-offline', to: toCode, ref: msg.ref });
-          const token = target && target.fcmToken;
+          // Look up the token in the PERSISTENT map — when the app is closed there
+          // is no live `target` peer, so target.fcmToken would always be undefined.
+          const token = fcmTokens.get(toCode);
           const payload = msg && msg.payload;
           const fromName = me ? me.name : undefined;
           if (token && payload && typeof payload === 'object') {
