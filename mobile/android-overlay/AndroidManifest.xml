@@ -46,6 +46,12 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
+        <!-- FCM-displayed message notifications (app killed/backgrounded) use this
+             high-importance channel so they get a heads-up + sound instead of the
+             generic silent fallback. The channel is created at app startup. -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="filedrop_messages"/>
         <!-- keeps a call running when the app is backgrounded/closed -->
         <service
             android:name=".CallForegroundService"

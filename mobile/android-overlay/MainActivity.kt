@@ -35,7 +35,27 @@ class MainActivity : FlutterActivity() {
             setReferenceCounted(true)
             acquire()
         }
+        ensureChannels()
         handleCallActionIntent(intent)
+    }
+
+    // Create our notification channels up front so they exist even when an FCM
+    // message notification is rendered by the system while the app is killed (the
+    // native notify path would otherwise create the Messages channel lazily, and
+    // FCM's default_notification_channel_id meta-data points here for heads-up).
+    private fun ensureChannels() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val nm = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (nm.getNotificationChannel("filedrop_messages") == null) {
+            nm.createNotificationChannel(
+                NotificationChannel("filedrop_messages", "Messages", NotificationManager.IMPORTANCE_HIGH)
+            )
+        }
+        if (nm.getNotificationChannel(INCOMING_CHANNEL) == null) {
+            nm.createNotificationChannel(
+                NotificationChannel(INCOMING_CHANNEL, "Incoming calls", NotificationManager.IMPORTANCE_HIGH)
+            )
+        }
     }
 
     override fun onNewIntent(intent: Intent) {

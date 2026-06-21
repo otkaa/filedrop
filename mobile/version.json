@@ -1,5 +1,5 @@
 {
-  "version": "1.8.1",
+  "version": "1.8.2",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Message notifications now show reliably whether the app is in the background or fully closed (push-driven, like the calls). Includes the reliable wake-on-call fix."
+  "notes": "Message notifications now show reliably whether the app is backgrounded or fully closed, with a proper heads-up (push-driven, like calls). Includes the reliable wake-on-call fix."
 }
