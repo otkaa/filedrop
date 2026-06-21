@@ -6,7 +6,9 @@ import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 /// FCM (push) so incoming calls/messages wake the phone even when the app is
 /// fully closed — the only mechanism Android allows for that (same as
 /// WhatsApp/Discord). The relay sends a high-priority push when your socket is
-/// offline; for a CALL the push carries the offer SDP so we can answer.
+/// offline. A CALL push is only a tiny WAKE SIGNAL (callId/from); the real offer
+/// SDP is far too big for FCM (4K cap) so the relay replays it over the socket
+/// once we connect — the main app waits for it before answering.
 
 /// Runs in a background isolate when a push arrives and the app is dead.
 @pragma('vm:entry-point')
@@ -17,7 +19,8 @@ Future<void> fcmBackgroundHandler(RemoteMessage message) async {
   final data = message.data;
   if (data['type'] == 'call') {
     // Show the native ringing screen (lock-screen wake + ring + vibrate). On
-    // Answer, the main app reads this `extra` to set up the WebRTC answer.
+    // Answer, the main app uses this `extra` (callId/fromCode) to find the offer
+    // the relay replays over the socket once we connect.
     await FlutterCallkitIncoming.showCallkitIncoming(CallKitParams(
       id: '${data['callId'] ?? ''}',
       nameCaller: '${data['fromName'] ?? 'Someone'}',
@@ -27,7 +30,6 @@ Future<void> fcmBackgroundHandler(RemoteMessage message) async {
       textDecline: 'Decline',
       extra: <String, dynamic>{
         'fromCode': '${data['fromCode'] ?? ''}',
-        'sdp': '${data['sdp'] ?? ''}',
         'callId': '${data['callId'] ?? ''}',
       },
       android: const AndroidParams(

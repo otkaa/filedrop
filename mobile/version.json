@@ -1,5 +1,5 @@
 {
-  "version": "1.7.0",
+  "version": "1.8.0",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Calls and messages now reach you even when the app is fully closed (push notifications)."
+  "notes": "Calls now wake a fully-closed phone reliably — the incoming-call push no longer carries the (oversized) call data, so it always gets through, and the offer is delivered over the connection the moment you answer."
 }

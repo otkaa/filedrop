@@ -73,6 +73,10 @@ class FiledropService extends ChangeNotifier {
   // calls
   CallSession? activeCall;
   Map<String, dynamic>? pendingIncomingCall; // {callId, peer, offerSdp, peerName}
+  // Set when the user taps Answer on an FCM-woken call BEFORE the offer SDP has
+  // arrived over the socket (the relay replays it on connect). The offer handler
+  // auto-accepts when it sees a matching callId. '*' = accept the next offer.
+  String? _answeredCallId;
 
   bool started = false;
   String? startError;
@@ -479,7 +483,14 @@ class FiledropService extends ChangeNotifier {
       }
       if (peer == null) return;
       pendingIncomingCall = {'callId': callId, 'peer': peer, 'offerSdp': sig['sdp'], 'peerName': sig['peerName']};
-      _showIncomingCallUi(callId ?? _uuid.v4(), '${sig['peerName'] ?? peer.name}');
+      // If the user already tapped Answer on an FCM-woken ring (the offer is only
+      // now arriving over the socket), accept straight away instead of re-ringing.
+      if (_answeredCallId != null && (_answeredCallId == '*' || _answeredCallId == callId)) {
+        _answeredCallId = null;
+        acceptCall();
+      } else {
+        _showIncomingCallUi(callId ?? _uuid.v4(), '${sig['peerName'] ?? peer.name}');
+      }
       notifyListeners();
       return;
     }
@@ -505,26 +516,31 @@ class FiledropService extends ChangeNotifier {
       acceptCall(); // the offer already arrived over the live socket
       return;
     }
-    // App was woken from a fully-closed state by FCM — the offer SDP rode in the
-    // push and is in the call's `extra`. Rebuild the pending call, then accept.
+    // App was woken from a fully-closed state by FCM. The push is only a wake
+    // signal — the offer SDP is far too big for FCM (4K cap), so the relay is
+    // holding it and replays it over the socket the moment we register. Mark the
+    // call answered, make sure the relay is connecting, and wait for the offer to
+    // land (the offer handler auto-accepts on a matching callId).
     final extra = (body is Map) ? body['extra'] : null;
-    if (extra is! Map) return;
-    final sdp = '${extra['sdp'] ?? ''}';
-    final fromCode = RelayClient.norm('${extra['fromCode'] ?? ''}');
-    final callId = '${extra['callId'] ?? ''}';
-    if (sdp.isEmpty || fromCode.length != 8) return;
-    final peer = _ensureRelayPeer(fromCode, null);
-    // wait for the relay so the answer can be delivered to the caller
-    for (var i = 0; i < 50 && !(_relay?.connected ?? false); i++) {
+    final fromCode = RelayClient.norm('${(extra is Map) ? extra['fromCode'] ?? '' : ''}');
+    final callId = '${(extra is Map) ? extra['callId'] ?? '' : ''}';
+    _answeredCallId = callId.isNotEmpty ? callId : '*';
+    if (fromCode.length == 8) _ensureRelayPeer(fromCode, null);
+    _relay?.connect(); // idempotent; ensures the socket is coming up
+    for (var i = 0; i < 75; i++) {
+      // ~15s
+      if (activeCall != null) return; // offer arrived and auto-accepted
+      if (pendingIncomingCall != null) {
+        acceptCall();
+        return;
+      }
       await Future.delayed(const Duration(milliseconds: 200));
     }
-    pendingIncomingCall = {
-      'callId': callId.isNotEmpty ? callId : _uuid.v4(),
-      'peer': peer,
-      'offerSdp': sdp,
-      'peerName': peer.name,
-    };
-    acceptCall();
+    // The held offer never reached us — give up cleanly so the ring stops.
+    _answeredCallId = null;
+    try {
+      await FlutterCallkitIncoming.endAllCalls();
+    } catch (_) {}
   }
 
   // Show the native ringing call screen (lock-screen wake + ringtone + vibration
@@ -610,6 +626,7 @@ class FiledropService extends ChangeNotifier {
   }
 
   void declineCall() {
+    _answeredCallId = null; // cancel any FCM-woken accept still waiting for the offer
     final inc = pendingIncomingCall;
     if (inc == null) return;
     pendingIncomingCall = null;
