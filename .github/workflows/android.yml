@@ -43,6 +43,7 @@ jobs:
           cp mobile/android-overlay/AndroidManifest.xml _app/android/app/src/main/AndroidManifest.xml
           mkdir -p _app/android/app/src/main/kotlin/dev/filedrop/filedrop
           cp mobile/android-overlay/MainActivity.kt _app/android/app/src/main/kotlin/dev/filedrop/filedrop/MainActivity.kt
+          cp mobile/android-overlay/CallForegroundService.kt _app/android/app/src/main/kotlin/dev/filedrop/filedrop/CallForegroundService.kt
           # a Flutter plugin requires compileSdk 36 — set it on the app and,
           # via the root override, on every plugin module too.
           sed -i 's/compileSdk = flutter.compileSdkVersion/compileSdk = 36/' _app/android/app/build.gradle.kts

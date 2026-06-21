@@ -1,5 +1,5 @@
 {
-  "version": "1.4.0",
+  "version": "1.4.2",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Call fixes: control buttons now light up, status shows 'In call', screen share appears correctly, and sharper camera/screen video."
+  "notes": "Calls keep running when you leave the app, with an ongoing call notification. PC screen share now shows on the phone."
 }

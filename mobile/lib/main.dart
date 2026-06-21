@@ -620,11 +620,23 @@ class _CallScreenState extends State<CallScreen> {
     await _remoteScreen.initialize();
     await _localCam.initialize();
     await _localScreen.initialize();
+    // Repaint whenever a renderer starts/stops actually showing video, so a
+    // tile appears the moment real frames arrive (and hides when they stop).
+    for (final r in [_remoteCam, _remoteScreen, _localCam, _localScreen]) {
+      r.addListener(_onRender);
+    }
     if (mounted) setState(() => _ready = true);
+  }
+
+  void _onRender() {
+    if (mounted) setState(() {});
   }
 
   @override
   void dispose() {
+    for (final r in [_remoteCam, _remoteScreen, _localCam, _localScreen]) {
+      r.removeListener(_onRender);
+    }
     _remoteCam.dispose();
     _remoteScreen.dispose();
     _localCam.dispose();
@@ -651,11 +663,14 @@ class _CallScreenState extends State<CallScreen> {
           _localScreen.srcObject = call.localScreen;
         }
 
+        // Show a tile only when its renderer is ACTUALLY producing video frames
+        // (robust: works even if the peer's ctrl status flag never arrived —
+        // this is what was hiding the PC's screen share on the phone).
         final views = <String, RTCVideoRenderer>{};
-        if (call.remoteScreenOn && call.remoteScreen != null) views['remoteScreen'] = _remoteScreen;
-        if (call.remoteCamOn && call.remoteCamera != null) views['remoteCamera'] = _remoteCam;
-        if (call.screenOn && call.localScreen != null) views['localScreen'] = _localScreen;
-        if (call.camOn && call.localCamera != null) views['localCamera'] = _localCam;
+        if (_remoteScreen.renderVideo) views['remoteScreen'] = _remoteScreen;
+        if (_remoteCam.renderVideo) views['remoteCamera'] = _remoteCam;
+        if (_localScreen.renderVideo) views['localScreen'] = _localScreen;
+        if (_localCam.renderVideo) views['localCamera'] = _localCam;
 
         final mainKey = (_focus != null && views.containsKey(_focus)) ? _focus : (views.isNotEmpty ? views.keys.first : null);
         final pipKeys = views.keys.where((k) => k != mainKey).toList();

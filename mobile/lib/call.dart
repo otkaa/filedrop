@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'call_service.dart';
 import 'models.dart';
 
 /// One voice/video call. Mirrors the desktop's design: 3 transceivers
@@ -347,6 +348,16 @@ class CallSession extends ChangeNotifier {
     connected = true;
     _setStatus('In call');
     _sendCtrl(); // resync mute/camera/screen state now that we're up
+    _startCallService();
+  }
+
+  /// Start the ongoing-call foreground service so the call survives the app
+  /// being backgrounded/closed (HyperOS/MIUI kill background apps otherwise).
+  Future<void> _startCallService() async {
+    try {
+      await Permission.notification.request();
+    } catch (_) {}
+    await startCallService(text: 'In call with ${peer.name}');
   }
 
   void _setStatus(String s) {
@@ -373,6 +384,7 @@ class CallSession extends ChangeNotifier {
   Future<void> end({String? message, bool notifyPeer = true}) async {
     if (ended) return;
     ended = true;
+    stopCallService(); // tear down the ongoing-call notification + keep-alive
     if (message != null) status = message;
     if (notifyPeer) sendSignal('hangup', null);
     for (final s in [_micStream, _camStream, _screenStream]) {
