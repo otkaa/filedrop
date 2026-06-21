@@ -24,7 +24,7 @@ let ended = false;
 let connected = false;
 
 let remoteVideoCount = 0;
-const remote = { mic: true, cam: false, screen: false, deaf: false };
+const remote = { mic: true, cam: false, screen: false, deaf: false, camMirror: false };
 
 // elements
 const el = (id) => document.getElementById(id);
@@ -203,6 +203,7 @@ function bindCtrl(ch) {
     try {
       const s = JSON.parse(e.data);
       Object.assign(remote, s);
+      remote.camMirror = !!s.mir; // sender's outgoing camera is horizontally mirrored
       layoutRemote();
       renderBadges();
     } catch (_) {}
@@ -212,7 +213,7 @@ function bindCtrl(ch) {
 function sendCtrl() {
   if (!ctrl || ctrl.readyState !== 'open') return;
   try {
-    ctrl.send(JSON.stringify({ mic: !muted && !!micStream, cam: camOn, screen: screenOn, deaf: deafened }));
+    ctrl.send(JSON.stringify({ mic: !muted && !!micStream, cam: camOn, screen: screenOn, deaf: deafened, mir: false }));
   } catch (_) {}
 }
 
@@ -374,6 +375,9 @@ function layoutRemote() {
   const showCam = remote.cam && remoteCamera.srcObject;
   remoteScreen.classList.toggle('hidden', !showScreen);
   remoteCamera.classList.toggle('hidden', !showCam);
+  // flip the remote camera back if the sender declared it mirrored (e.g. phone
+  // front camera) — screen share is never flipped
+  remoteCamera.classList.toggle('mirrored', !!remote.camMirror);
   // if both, camera goes to a corner; if only camera, it fills
   remoteCamera.classList.toggle('cornered', showScreen && showCam);
   el('placeholder').classList.toggle('hidden', showScreen || showCam);

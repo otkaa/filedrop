@@ -680,7 +680,7 @@ class _CallScreenState extends State<CallScreen> {
           body: Stack(children: [
             Positioned.fill(
               child: (mainKey != null && _ready)
-                  ? GestureDetector(onTap: () => setState(() => _focus = null), child: _video(views[mainKey]!, mainKey, cover: false))
+                  ? GestureDetector(onTap: () => setState(() => _focus = null), child: _video(views[mainKey]!, mainKey, cover: false, mirror: _mirrorFor(mainKey, call)))
                   : _avatar(call),
             ),
             // top status bar
@@ -717,7 +717,7 @@ class _CallScreenState extends State<CallScreen> {
                           onTap: () => setState(() => _focus = k),
                           child: Container(
                             decoration: BoxDecoration(borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0x33FFFFFF)), boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 12)]),
-                            child: ClipRRect(borderRadius: BorderRadius.circular(14), child: SizedBox(width: 104, height: 150, child: _video(views[k]!, k, cover: true))),
+                            child: ClipRRect(borderRadius: BorderRadius.circular(14), child: SizedBox(width: 104, height: 150, child: _video(views[k]!, k, cover: true, mirror: _mirrorFor(k, call)))),
                           ),
                         ),
                       ),
@@ -736,6 +736,7 @@ class _CallScreenState extends State<CallScreen> {
                   _CallBtn(icon: call.muted ? Icons.mic_off_rounded : Icons.mic_rounded, label: 'Mute', danger: call.muted, onTap: () => call.toggleMute()),
                   _CallBtn(icon: call.deafened ? Icons.headset_off_rounded : Icons.headset_mic_rounded, label: 'Deafen', danger: call.deafened, onTap: () => call.toggleDeafen()),
                   _CallBtn(icon: call.camOn ? Icons.videocam_rounded : Icons.videocam_off_rounded, label: 'Camera', active: call.camOn, onTap: () => call.toggleCamera()),
+                  if (call.camOn) _CallBtn(icon: Icons.cameraswitch_rounded, label: 'Flip', onTap: () => call.switchCamera()),
                   _CallBtn(icon: call.screenOn ? Icons.stop_screen_share_rounded : Icons.screen_share_rounded, label: 'Share', active: call.screenOn, onTap: () => call.toggleScreen()),
                   _CallBtn(icon: Icons.call_end_rounded, label: 'End', end: true, onTap: () => call.end()),
                 ]),
@@ -747,12 +748,20 @@ class _CallScreenState extends State<CallScreen> {
     );
   }
 
-  Widget _video(RTCVideoRenderer r, String key, {required bool cover}) {
+  Widget _video(RTCVideoRenderer r, String key, {required bool cover, bool mirror = false}) {
     final isScreen = key.toLowerCase().contains('screen');
     final fit = cover
         ? RTCVideoViewObjectFit.RTCVideoViewObjectFitCover
         : (isScreen ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover);
-    return Container(color: Colors.black, child: RTCVideoView(r, mirror: key == 'localCamera', objectFit: fit));
+    return Container(color: Colors.black, child: RTCVideoView(r, mirror: mirror, objectFit: fit));
+  }
+
+  // Mirror your own front camera (natural selfie view) and flip the peer's camera
+  // when they report it's mirrored (their front camera). Never mirror screens.
+  bool _mirrorFor(String key, CallSession call) {
+    if (key == 'localCamera') return call.camFacing == 'user';
+    if (key == 'remoteCamera') return call.remoteCamMirror;
+    return false;
   }
 
   Widget _avatar(CallSession call) {
@@ -798,10 +807,10 @@ class _CallBtn extends StatelessWidget {
       onTap: onTap,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         Container(
-          width: 58,
-          height: 58,
+          width: 52,
+          height: 52,
           decoration: BoxDecoration(shape: BoxShape.circle, gradient: grad, color: bg, boxShadow: glow),
-          child: Icon(icon, color: iconColor, size: 25),
+          child: Icon(icon, color: iconColor, size: 23),
         ),
         const SizedBox(height: 7),
         Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),

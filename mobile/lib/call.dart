@@ -40,11 +40,13 @@ class CallSession extends ChangeNotifier {
   bool screenOn = false;
   bool ended = false;
   bool connected = false;
+  String camFacing = 'user'; // 'user' (front) or 'environment' (back)
 
   // remote live state (via ctrl channel)
   bool remoteMic = true;
   bool remoteCamOn = false;
   bool remoteScreenOn = false;
+  bool remoteCamMirror = false; // peer's camera is mirrored (front) -> flip to correct it
 
   CallSession({
     required this.callId,
@@ -249,12 +251,26 @@ class CallSession extends ChangeNotifier {
         }
         localCamera = _camStream;
         camOn = true;
+        camFacing = 'user';
       } catch (_) {
         return;
       }
     }
     _sendCtrl();
     notifyListeners();
+  }
+
+  /// Flip between the front and back camera mid-call.
+  Future<void> switchCamera() async {
+    if (!camOn || _camStream == null) return;
+    final tracks = _camStream!.getVideoTracks();
+    if (tracks.isEmpty) return;
+    try {
+      await Helper.switchCamera(tracks.first);
+      camFacing = camFacing == 'user' ? 'environment' : 'user';
+      _sendCtrl(); // tell the peer whether to flip our video (front is mirrored)
+      notifyListeners();
+    } catch (_) {}
   }
 
   Future<void> toggleDeafen() async {
@@ -310,6 +326,7 @@ class CallSession extends ChangeNotifier {
         remoteMic = m['mic'] ?? remoteMic;
         remoteCamOn = m['cam'] ?? remoteCamOn;
         remoteScreenOn = m['screen'] ?? remoteScreenOn;
+        remoteCamMirror = m['mir'] ?? remoteCamMirror;
         notifyListeners();
       } catch (_) {}
     };
@@ -322,6 +339,7 @@ class CallSession extends ChangeNotifier {
         'mic': !muted && _micStream != null,
         'cam': camOn,
         'screen': screenOn,
+        'mir': camOn && camFacing == 'user', // front camera is mirrored
       })));
     } catch (_) {}
   }
@@ -356,6 +374,13 @@ class CallSession extends ChangeNotifier {
   Future<void> _startCallService() async {
     try {
       await Permission.notification.request();
+    } catch (_) {}
+    // One-tap "let it run in the background" — the same exemption WhatsApp/Discord
+    // ask for, so calls survive backgrounding without locking the app in recents.
+    try {
+      if (await Permission.ignoreBatteryOptimizations.isDenied) {
+        await Permission.ignoreBatteryOptimizations.request();
+      }
     } catch (_) {}
     await startCallService(text: 'In call with ${peer.name}');
   }
@@ -406,9 +431,10 @@ class CallSession extends ChangeNotifier {
   }
 
   // tiny JSON helpers for the ctrl channel
-  String _encode(Map<String, bool> m) => '{"mic":${m['mic']},"cam":${m['cam']},"screen":${m['screen']}}';
+  String _encode(Map<String, bool> m) =>
+      '{"mic":${m['mic']},"cam":${m['cam']},"screen":${m['screen']},"mir":${m['mir']}}';
   Map<String, bool> _decode(String s) {
     bool g(String k) => RegExp('"$k"\\s*:\\s*true').hasMatch(s);
-    return {'mic': g('mic'), 'cam': g('cam'), 'screen': g('screen')};
+    return {'mic': g('mic'), 'cam': g('cam'), 'screen': g('screen'), 'mir': g('mir')};
   }
 }

@@ -1,5 +1,5 @@
 {
-  "version": "1.4.2",
+  "version": "1.4.3",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Calls keep running when you leave the app, with an ongoing call notification. PC screen share now shows on the phone."
+  "notes": "Switch between front/back camera, front camera no longer mirrored for the other person, and a one-tap 'run in background' so calls survive leaving the app."
 }

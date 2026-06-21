@@ -66,6 +66,9 @@ body {
   object-fit: cover;
   box-shadow: 0 6px 20px rgba(0,0,0,0.4);
 }
+/* flip a remote video horizontally when the sender declares it mirrored
+   (only applied to the remote camera, never the remote screen) */
+.remote-camera.mirrored { transform: scaleX(-1); }
 .placeholder {
   text-align: center;
   color: var(--muted);
