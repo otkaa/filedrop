@@ -4,7 +4,7 @@ const api = window.filedrop;
 
 // quality presets for screen share
 const QUALITY = { '720': { w: 1280, h: 720 }, '1080': { w: 1920, h: 1080 }, source: null };
-const BITRATE = { '720': 2500000, '1080': 5000000, source: 8000000 };
+const BITRATE = { '720': 4000000, '1080': 6000000, source: 8000000 };
 
 let pc = null;
 let init = null; // { role, callId, peer, offerSdp }
@@ -21,6 +21,7 @@ let deafened = false;
 let camOn = false;
 let screenOn = false;
 let ended = false;
+let connected = false;
 
 let remoteVideoCount = 0;
 const remote = { mic: true, cam: false, screen: false, deaf: false };
@@ -47,6 +48,8 @@ async function boot() {
 async function start(i) {
   if (pc) cleanupPc();
   ended = false;
+  connected = false;
+  remoteVideoCount = 0;
   init = i;
   el('peer-name').textContent = (i.peer && i.peer.name) || 'Call';
   setStatus(i.role === 'caller' ? 'calling…' : 'connecting…');
@@ -71,30 +74,42 @@ function createPc() {
     if (track.kind === 'audio') {
       remoteAudio.srcObject = new MediaStream([track]);
       remoteAudio.muted = deafened;
-    } else {
-      const idx = remoteVideoCount++;
-      const target = idx === 0 ? remoteCamera : remoteScreen;
-      target.srcObject = new MediaStream([track]);
-      // reveal as a fallback if ctrl state hasn't arrived
-      track.onunmute = () => {
-        if (idx === 0) remote.cam = true;
-        else remote.screen = true;
-        layoutRemote();
-      };
-      track.onmute = () => {
-        if (idx === 0) remote.cam = false;
-        else remote.screen = false;
-        layoutRemote();
-      };
+      return;
     }
+    // Distinguish the two remote video m-lines by their transceiver mid
+    // (audio=0, camera=1, screen=2 — the order they're added) rather than by
+    // arrival order, which is unreliable and swapped camera/screen.
+    const mid = e.transceiver && e.transceiver.mid;
+    const isScreen = mid === '2' || (mid == null && remoteVideoCount > 0);
+    remoteVideoCount++;
+    const target = isScreen ? remoteScreen : remoteCamera;
+    target.srcObject = new MediaStream([track]);
+    // reveal as a fallback if ctrl state hasn't arrived
+    track.onunmute = () => {
+      if (isScreen) remote.screen = true;
+      else remote.cam = true;
+      layoutRemote();
+    };
+    track.onmute = () => {
+      if (isScreen) remote.screen = false;
+      else remote.cam = false;
+      layoutRemote();
+    };
   };
 
   pc.onconnectionstatechange = () => {
     const s = pc.connectionState;
-    if (s === 'connected') setStatus('connected', 'connected');
-    else if (s === 'failed') setStatus('connection failed', 'failed');
-    else if (s === 'disconnected') setStatus('reconnecting…');
+    if (s === 'connected') onConnected();
+    else if (s === 'failed') setStatus('Connection failed', 'failed');
+    else if (s === 'disconnected') { if (connected) setStatus('Reconnecting…'); }
     else if (s === 'closed') {/* handled by end() */}
+  };
+
+  // ICE state is more reliable than peer-connection state on some networks, so
+  // settle the status from whichever fires first (connected/completed).
+  pc.oniceconnectionstatechange = () => {
+    const s = pc.iceConnectionState;
+    if (s === 'connected' || s === 'completed') onConnected();
   };
 
   if (init.role === 'caller') {
@@ -217,6 +232,20 @@ async function getMic() {
   }
 }
 
+/** Raise a sender's encoding max bitrate (and optionally framerate). */
+async function setMaxBitrate(sender, bps, fps) {
+  if (!sender) return;
+  try {
+    const p = sender.getParameters();
+    if (!p.encodings || !p.encodings.length) p.encodings = [{}];
+    for (const enc of p.encodings) {
+      enc.maxBitrate = bps;
+      if (fps != null) enc.maxFramerate = fps;
+    }
+    await sender.setParameters(p);
+  } catch (_) {}
+}
+
 async function toggleCamera() {
   if (camOn) {
     if (camStream) camStream.getTracks().forEach((t) => t.stop());
@@ -228,19 +257,13 @@ async function toggleCamera() {
   } else {
     try {
       camStream = await navigator.mediaDevices.getUserMedia({
-        video: { width: { ideal: 1280 }, height: { ideal: 720 }, frameRate: { ideal: 30 } },
+        video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } },
       });
       const track = camStream.getVideoTracks()[0];
       if (tx.camera) {
         await tx.camera.sender.replaceTrack(track);
-        // cap the camera encoder so it can't hog the link (screen has its own cap)
-        try {
-          const p = tx.camera.sender.getParameters();
-          if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-          p.encodings[0].maxBitrate = 1500000; // ~1.5 Mbps for 720p
-          p.encodings[0].maxFramerate = 30;
-          await tx.camera.sender.setParameters(p);
-        } catch (_) {}
+        // raise the camera encoder so 1080p looks crisp (~3 Mbps)
+        await setMaxBitrate(tx.camera.sender, 3000000, 30);
       }
       localCamera.srcObject = camStream;
       localCamera.classList.remove('hidden');
@@ -250,7 +273,7 @@ async function toggleCamera() {
       return;
     }
   }
-  el('btn-camera').classList.toggle('active', camOn);
+  renderControls();
   sendCtrl();
 }
 
@@ -275,8 +298,8 @@ async function startScreen(sourceId, fps, quality) {
     localScreen.srcObject = stream;
     localScreen.classList.remove('hidden');
     screenOn = true;
-    el('btn-screen').classList.add('active');
     el('live-quality').classList.remove('hidden');
+    renderControls();
     sendCtrl();
   } catch (err) {
     toast('Screen share failed: ' + err.message);
@@ -285,13 +308,9 @@ async function startScreen(sourceId, fps, quality) {
 
 async function applyScreenParams(fps, quality) {
   if (!tx.screen || !tx.screen.sender) return;
-  try {
-    const p = tx.screen.sender.getParameters();
-    if (!p.encodings || !p.encodings.length) p.encodings = [{}];
-    p.encodings[0].maxBitrate = BITRATE[quality] || 5000000;
-    p.encodings[0].maxFramerate = Number(fps);
-    await tx.screen.sender.setParameters(p);
-  } catch (_) {}
+  // give the screen-share a high bitrate (>= ~4 Mbps) so shared screens stay sharp
+  const bps = Math.max(BITRATE[quality] || 0, 4000000);
+  await setMaxBitrate(tx.screen.sender, bps, Number(fps));
 }
 
 async function stopScreen() {
@@ -303,16 +322,15 @@ async function stopScreen() {
   localScreen.classList.add('hidden');
   localScreen.srcObject = null;
   screenOn = false;
-  el('btn-screen').classList.remove('active');
   el('live-quality').classList.add('hidden');
+  renderControls();
   sendCtrl();
 }
 
 function toggleMute() {
   muted = !muted;
   if (micStream) micStream.getAudioTracks().forEach((t) => (t.enabled = !muted));
-  el('btn-mic').classList.toggle('danger-on', muted);
-  el('btn-mic').querySelector('.lbl').textContent = muted ? 'Unmute' : 'Mute';
+  renderControls();
   sendCtrl();
 }
 
@@ -320,10 +338,32 @@ function toggleDeafen() {
   deafened = !deafened;
   remoteAudio.muted = deafened;
   // deafening also mutes your mic (like Discord)
-  if (deafened && !muted) toggleMute();
-  el('btn-deafen').classList.toggle('danger-on', deafened);
-  el('btn-deafen').querySelector('.lbl').textContent = deafened ? 'Undeafen' : 'Deafen';
+  if (deafened && !muted) {
+    toggleMute(); // also re-renders + sends ctrl
+    return;
+  }
+  renderControls();
   sendCtrl();
+}
+
+/**
+ * Re-render every control button's visual (active/toggled) state from the
+ * ACTUAL current state, so the UI can never drift out of sync with reality.
+ */
+function renderControls() {
+  const mic = el('btn-mic');
+  mic.classList.toggle('danger-on', muted);
+  mic.querySelector('.lbl').textContent = muted ? 'Unmute' : 'Mute';
+
+  const deafen = el('btn-deafen');
+  deafen.classList.toggle('danger-on', deafened);
+  deafen.querySelector('.lbl').textContent = deafened ? 'Undeafen' : 'Deafen';
+
+  el('btn-camera').classList.toggle('active', camOn);
+
+  const screen = el('btn-screen');
+  screen.classList.toggle('active', screenOn);
+  screen.querySelector('.lbl').textContent = screenOn ? 'Stop' : 'Share';
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +428,7 @@ function wireControls() {
   el('btn-screen').onclick = () => (screenOn ? stopScreen() : openSharePicker());
   el('btn-hangup').onclick = () => end('Call ended', 'ended', true);
   el('share-cancel').onclick = () => el('share-modal').classList.add('hidden');
+  renderControls(); // paint initial (all-off) button states
 
   const liveChange = () => {
     if (screenOn && currentSourceId) startScreen(currentSourceId, el('live-fps').value, el('live-q').value);
@@ -431,6 +472,17 @@ function cleanupPc() {
     if (pc) pc.close();
   } catch (_) {}
   pc = null;
+}
+
+/** Called once the peer connection actually connects (PC or ICE state). */
+function onConnected() {
+  if (connected) {
+    sendCtrl();
+    return;
+  }
+  connected = true;
+  setStatus('In call', 'connected');
+  sendCtrl(); // resync mute/camera/screen state now that we're up
 }
 
 function setStatus(text, cls) {

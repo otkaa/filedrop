@@ -38,6 +38,7 @@ class CallSession extends ChangeNotifier {
   bool camOn = false;
   bool screenOn = false;
   bool ended = false;
+  bool connected = false;
 
   // remote live state (via ctrl channel)
   bool remoteMic = true;
@@ -76,29 +77,44 @@ class CallSession extends ChangeNotifier {
 
     _pc!.onTrack = (RTCTrackEvent e) {
       final track = e.track;
-      final stream = e.streams.isNotEmpty ? e.streams.first : null;
       if (track.kind == 'audio') {
         // remote audio plays automatically; keep a ref so Deafen can mute it
         _remoteAudioTrack = track;
         track.enabled = !deafened;
-      } else {
-        final idx = _remoteVideoCount++;
-        if (idx == 0) {
-          remoteCamera = stream;
-        } else {
-          remoteScreen = stream;
-        }
-        notifyListeners();
+        return;
       }
+      final stream = e.streams.isNotEmpty ? e.streams.first : null;
+      if (stream == null) return;
+      // Distinguish the two remote video m-lines by their transceiver mid
+      // (audio=0, camera=1, screen=2 — the order we add them) rather than by
+      // arrival order, which is unreliable and swapped camera/screen.
+      final mid = e.transceiver?.mid;
+      final isScreen = mid == '2' || (mid == null && _remoteVideoCount > 0);
+      _remoteVideoCount++;
+      if (isScreen) {
+        remoteScreen = stream;
+      } else {
+        remoteCamera = stream;
+      }
+      notifyListeners();
     };
 
     _pc!.onConnectionState = (state) {
       if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-        _setStatus('connected');
+        _onConnected();
       } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
-        _setStatus('connection failed');
+        _setStatus('Connection failed');
       } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
-        _setStatus('reconnecting…');
+        if (connected) _setStatus('Reconnecting…');
+      }
+    };
+
+    // ICE state is more reliable than peer-connection state on some devices, so
+    // settle the status from whichever fires first.
+    _pc!.onIceConnectionState = (state) {
+      if (state == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+          state == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+        _onConnected();
       }
     };
 
@@ -133,17 +149,15 @@ class CallSession extends ChangeNotifier {
 
     final offer = await _pc!.createOffer();
     await _pc!.setLocalDescription(offer);
-    _setStatus('finding network…');
+    _setStatus('Calling…');
     await _gather();
     final desc = await _pc!.getLocalDescription();
-    final sdpLen = desc?.sdp?.length ?? 0;
-    _setStatus('calling… (sdp $sdpLen)');
     final ok = await sendSignal('offer', desc?.sdp);
-    _setStatus(ok ? 'ringing…' : "couldn't reach device");
+    if (!connected) _setStatus(ok ? 'Ringing…' : "Couldn't reach them");
   }
 
   Future<void> _makeAnswer(String sdp) async {
-    _setStatus('answering…');
+    _setStatus('Connecting…');
     await _pc!.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
     await _assignTransceivers();
     final mic = await _getMic();
@@ -154,13 +168,10 @@ class CallSession extends ChangeNotifier {
 
     final answer = await _pc!.createAnswer();
     await _pc!.setLocalDescription(answer);
-    _setStatus('finding network…');
     await _gather();
     final desc = await _pc!.getLocalDescription();
-    final sdpLen = desc?.sdp?.length ?? 0;
-    _setStatus('sending answer… (sdp $sdpLen)');
     final ok = await sendSignal('answer', desc?.sdp);
-    _setStatus(ok ? 'waiting for PC…' : "couldn't reach PC ❌");
+    if (!connected && !ok) _setStatus("Couldn't reach them");
   }
 
   Future<void> _assignTransceivers() async {
@@ -223,10 +234,18 @@ class CallSession extends ChangeNotifier {
         await Permission.camera.request();
         _camStream = await navigator.mediaDevices.getUserMedia({
           'audio': false,
-          'video': {'facingMode': 'user', 'width': 1280, 'height': 720},
+          'video': {
+            'facingMode': 'user',
+            'width': {'ideal': 1920},
+            'height': {'ideal': 1080},
+            'frameRate': {'ideal': 30},
+          },
         });
         final track = _camStream!.getVideoTracks().first;
-        if (_cameraTx != null) await _cameraTx!.sender.replaceTrack(track);
+        if (_cameraTx != null) {
+          await _cameraTx!.sender.replaceTrack(track);
+          await _setMaxBitrate(_cameraTx!.sender, 3000000); // ~3 Mbps for crisp video
+        }
         localCamera = _camStream;
         camOn = true;
       } catch (_) {
@@ -255,9 +274,15 @@ class CallSession extends ChangeNotifier {
       if (_screenTx != null) await _screenTx!.sender.replaceTrack(null);
     } else {
       try {
-        _screenStream = await navigator.mediaDevices.getDisplayMedia({'video': true, 'audio': false});
+        _screenStream = await navigator.mediaDevices.getDisplayMedia({
+          'video': {'frameRate': {'ideal': 30}},
+          'audio': false,
+        });
         final track = _screenStream!.getVideoTracks().first;
-        if (_screenTx != null) await _screenTx!.sender.replaceTrack(track);
+        if (_screenTx != null) {
+          await _screenTx!.sender.replaceTrack(track);
+          await _setMaxBitrate(_screenTx!.sender, 4000000); // ~4 Mbps so screen text stays sharp
+        }
         localScreen = _screenStream;
         screenOn = true;
         // stopped from the system "casting" notification
@@ -314,9 +339,34 @@ class CallSession extends ChangeNotifier {
     timer.cancel();
   }
 
+  void _onConnected() {
+    if (connected) {
+      _sendCtrl();
+      return;
+    }
+    connected = true;
+    _setStatus('In call');
+    _sendCtrl(); // resync mute/camera/screen state now that we're up
+  }
+
   void _setStatus(String s) {
     status = s;
     notifyListeners();
+  }
+
+  /// Raise the per-sender encoding bitrate so video looks crisp on good links.
+  Future<void> _setMaxBitrate(RTCRtpSender sender, int bps) async {
+    try {
+      final params = sender.parameters;
+      if (params.encodings == null || params.encodings!.isEmpty) {
+        params.encodings = [RTCRtpEncoding(maxBitrate: bps)];
+      } else {
+        for (final enc in params.encodings!) {
+          enc.maxBitrate = bps;
+        }
+      }
+      await sender.setParameters(params);
+    } catch (_) {}
   }
 
   /// Hang up. notifyPeer=true sends a hangup to the other side.

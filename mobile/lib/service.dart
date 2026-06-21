@@ -423,23 +423,29 @@ class FiledropService extends ChangeNotifier {
   }
 
   void _beginCall(String callId, Peer peer, {required bool isCaller, String? offerSdp}) {
-    final call = CallSession(
+    late CallSession call;
+    call = CallSession(
       callId: callId,
       peer: peer,
       isCaller: isCaller,
       offerSdp: offerSdp,
       sendSignal: (kind, sdp) => _postSignal(peer, kind, callId, sdp),
       onClosed: () {
+        call.removeListener(notifyListeners);
         activeCall = null;
         notifyListeners();
       },
     );
+    // Bridge the call's own notifications into the service. The call UI listens
+    // to `service`, so without this its mute/camera/screen buttons and status
+    // would never repaint when the CallSession changes.
+    call.addListener(notifyListeners);
     activeCall = call;
     notifyListeners();
     call.start();
     if (isCaller) {
       Timer(const Duration(seconds: 40), () {
-        if (activeCall == call && !call.ended && call.status != 'connected') {
+        if (activeCall == call && !call.ended && !call.connected) {
           call.end(message: 'No answer', notifyPeer: false);
         }
       });

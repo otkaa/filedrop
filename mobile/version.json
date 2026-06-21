@@ -1,5 +1,5 @@
 {
-  "version": "1.3.0",
+  "version": "1.4.0",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Connect over the internet by code — no same network or VPN needed. Chat and calls now work anywhere via your unique code."
+  "notes": "Call fixes: control buttons now light up, status shows 'In call', screen share appears correctly, and sharper camera/screen video."
 }

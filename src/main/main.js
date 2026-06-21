@@ -258,6 +258,9 @@ function createWindow() {
 
   win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
 
+  // Closing the panel only hides it to the tray — the app keeps running and an
+  // in-progress call (which lives in its own callWindow) is NOT torn down. Only
+  // an explicit Quit (app.isQuitting) actually destroys the window.
   win.on('close', (e) => {
     if (!app.isQuitting) {
       e.preventDefault();
