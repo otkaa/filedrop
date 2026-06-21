@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:uuid/uuid.dart';
+import 'call.dart';
 import 'certs.dart';
 import 'discovery.dart';
 import 'models.dart';
@@ -36,6 +37,10 @@ class FiledropService extends ChangeNotifier {
 
   IncomingRequest? pendingRequest;
   Completer<bool>? _approvalCompleter;
+
+  // calls
+  CallSession? activeCall;
+  Map<String, dynamic>? pendingIncomingCall; // {callId, peer, offerSdp, peerName}
 
   bool started = false;
   String? startError;
@@ -77,6 +82,7 @@ class FiledropService extends ChangeNotifier {
         self: self,
         requestApproval: _approval,
         onMessage: _onIncomingMessage,
+        onSignal: _onSignal,
         downloadDir: () => downloadDir,
         onTransfer: _onTransfer,
       );
@@ -197,6 +203,113 @@ class FiledropService extends ChangeNotifier {
 
   void closeConvo() {
     activeConvo = null;
+  }
+
+  // --- calls (signaling relay; media lives in CallSession) ---
+  void _onSignal(Map<String, dynamic> sig) {
+    final kind = sig['kind'] as String;
+    final callId = sig['callId'] as String?;
+    final peer = _resolvePeer(sig);
+
+    if (kind == 'offer') {
+      if (activeCall != null || pendingIncomingCall != null) {
+        if (peer != null) _postSignal(peer, 'busy', callId, null);
+        return;
+      }
+      if (peer == null) return;
+      pendingIncomingCall = {'callId': callId, 'peer': peer, 'offerSdp': sig['sdp'], 'peerName': sig['peerName']};
+      notifyListeners();
+      return;
+    }
+
+    // caller gave up before we accepted
+    if ((kind == 'hangup' || kind == 'decline' || kind == 'busy') &&
+        pendingIncomingCall != null &&
+        pendingIncomingCall!['callId'] == callId) {
+      pendingIncomingCall = null;
+      notifyListeners();
+      return;
+    }
+
+    if (activeCall == null || activeCall!.callId != callId) return;
+    if (activeCall!.peer.id != sig['peerId']) return;
+    activeCall!.handleSignal(kind, sig['sdp'] as String?);
+  }
+
+  Peer? _resolvePeer(Map<String, dynamic> sig) {
+    final known = peers[sig['peerId']];
+    if (known != null && known.fingerprint != null) return known;
+    if (sig['peerIp'] != null && sig['peerPort'] != null && sig['peerFingerprint'] != null) {
+      return Peer(
+        id: '${sig['peerId']}',
+        name: '${sig['peerName']}',
+        ip: _normIp('${sig['peerIp']}'),
+        port: (sig['peerPort'] as num).toInt(),
+        fingerprint: '${sig['peerFingerprint']}',
+        manual: true,
+      );
+    }
+    return known;
+  }
+
+  String _normIp(String ip) => ip.replaceFirst(RegExp(r'^::ffff:'), '');
+
+  Future<void> _postSignal(Peer peer, String kind, String? callId, String? sdp) async {
+    try {
+      await net.postJson(peer, '/api/rtc', {
+        'from': {'id': self.id, 'name': self.name, 'os': self.os, 'port': self.port, 'fingerprint': self.fingerprint},
+        'kind': kind,
+        'callId': callId,
+        'sdp': sdp,
+      });
+    } catch (_) {}
+  }
+
+  String? startCall(String peerId) {
+    if (activeCall != null) return 'Already in a call';
+    final peer = peers[peerId];
+    if (peer == null) return 'Device unavailable';
+    _beginCall(_uuid.v4(), peer, isCaller: true, offerSdp: null);
+    return null;
+  }
+
+  void acceptCall() {
+    final inc = pendingIncomingCall;
+    if (inc == null) return;
+    pendingIncomingCall = null;
+    _beginCall(inc['callId'] as String, inc['peer'] as Peer, isCaller: false, offerSdp: inc['offerSdp'] as String?);
+  }
+
+  void declineCall() {
+    final inc = pendingIncomingCall;
+    if (inc == null) return;
+    pendingIncomingCall = null;
+    _postSignal(inc['peer'] as Peer, 'decline', inc['callId'] as String?, null);
+    notifyListeners();
+  }
+
+  void _beginCall(String callId, Peer peer, {required bool isCaller, String? offerSdp}) {
+    final call = CallSession(
+      callId: callId,
+      peer: peer,
+      isCaller: isCaller,
+      offerSdp: offerSdp,
+      sendSignal: (kind, sdp) => _postSignal(peer, kind, callId, sdp),
+      onClosed: () {
+        activeCall = null;
+        notifyListeners();
+      },
+    );
+    activeCall = call;
+    notifyListeners();
+    call.start();
+    if (isCaller) {
+      Timer(const Duration(seconds: 40), () {
+        if (activeCall == call && !call.ended && call.status != 'connected') {
+          call.end(message: 'No answer', notifyPeer: false);
+        }
+      });
+    }
   }
 
   // --- sending files ---

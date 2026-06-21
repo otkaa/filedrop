@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'models.dart';
 import 'service.dart';
@@ -41,6 +42,30 @@ class HomeScreen extends StatefulWidget {
 
 class _HomeScreenState extends State<HomeScreen> {
   int _tab = 0;
+  bool _inCall = false;
+
+  @override
+  void initState() {
+    super.initState();
+    service.addListener(_onChange);
+  }
+
+  @override
+  void dispose() {
+    service.removeListener(_onChange);
+    super.dispose();
+  }
+
+  // open the call screen whenever a call becomes active (incoming or outgoing)
+  void _onChange() {
+    if (!mounted) return;
+    if (service.activeCall != null && !_inCall) {
+      _inCall = true;
+      Navigator.of(context)
+          .push(MaterialPageRoute(builder: (_) => const CallScreen()))
+          .then((_) => _inCall = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -60,6 +85,7 @@ class _HomeScreenState extends State<HomeScreen> {
           appBar: AppBar(title: const Text('Filedrop'), backgroundColor: const Color(0xFF171A21)),
           body: Column(
             children: [
+              if (service.pendingIncomingCall != null) const _CallRingBanner(),
               if (service.pendingRequest != null) _IncomingBanner(req: service.pendingRequest!),
               Expanded(child: _tab == 0 ? const _DevicesTab() : const _SettingsTab()),
             ],
@@ -180,6 +206,14 @@ class _DeviceTile extends StatelessWidget {
               decoration: const BoxDecoration(color: Color(0xFF4F7CFF), shape: BoxShape.circle),
               child: Text('$unread', style: const TextStyle(fontSize: 11)),
             ),
+          IconButton(
+            icon: const Icon(Icons.call),
+            tooltip: 'Call',
+            onPressed: () {
+              final err = service.startCall(peer.id);
+              if (err != null) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.send),
             tooltip: 'Send files',
@@ -389,6 +423,148 @@ class _SettingsTabState extends State<_SettingsTab> {
         const SizedBox(height: 20),
         Text('Filedrop v$kAppVersion', style: const TextStyle(color: Colors.white38, fontSize: 12)),
       ],
+    );
+  }
+}
+
+class _CallRingBanner extends StatelessWidget {
+  const _CallRingBanner();
+  @override
+  Widget build(BuildContext context) {
+    final inc = service.pendingIncomingCall!;
+    return Container(
+      width: double.infinity,
+      color: const Color(0xFF1F2A3A),
+      padding: const EdgeInsets.all(12),
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text('📞 ${inc['peerName']} is calling…', style: const TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        Row(children: [
+          FilledButton.icon(onPressed: () => service.acceptCall(), icon: const Icon(Icons.call), label: const Text('Accept')),
+          const SizedBox(width: 8),
+          OutlinedButton.icon(onPressed: () => service.declineCall(), icon: const Icon(Icons.call_end), label: const Text('Decline')),
+        ]),
+      ]),
+    );
+  }
+}
+
+class CallScreen extends StatefulWidget {
+  const CallScreen({super.key});
+  @override
+  State<CallScreen> createState() => _CallScreenState();
+}
+
+class _CallScreenState extends State<CallScreen> {
+  final _remoteCam = RTCVideoRenderer();
+  final _remoteScreen = RTCVideoRenderer();
+  final _localCam = RTCVideoRenderer();
+  bool _ready = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _init();
+  }
+
+  Future<void> _init() async {
+    await _remoteCam.initialize();
+    await _remoteScreen.initialize();
+    await _localCam.initialize();
+    if (mounted) setState(() => _ready = true);
+  }
+
+  @override
+  void dispose() {
+    _remoteCam.dispose();
+    _remoteScreen.dispose();
+    _localCam.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListenableBuilder(
+      listenable: service,
+      builder: (context, _) {
+        final call = service.activeCall;
+        if (call == null) {
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            if (Navigator.canPop(context)) Navigator.pop(context);
+          });
+          return const Scaffold(backgroundColor: Colors.black, body: Center(child: Text('Call ended', style: TextStyle(color: Colors.white))));
+        }
+        if (_ready) {
+          _remoteCam.srcObject = call.remoteCamera;
+          _remoteScreen.srcObject = call.remoteScreen;
+          _localCam.srcObject = call.localCamera;
+        }
+        final showScreen = call.remoteScreenOn && call.remoteScreen != null;
+        final showCam = call.remoteCamOn && call.remoteCamera != null;
+        return Scaffold(
+          backgroundColor: Colors.black,
+          body: SafeArea(
+            child: Stack(children: [
+              Positioned.fill(
+                child: _ready && (showScreen || showCam)
+                    ? RTCVideoView(showScreen ? _remoteScreen : _remoteCam, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain)
+                    : Center(
+                        child: Column(mainAxisSize: MainAxisSize.min, children: [
+                          const CircleAvatar(radius: 44, child: Icon(Icons.person, size: 44)),
+                          const SizedBox(height: 12),
+                          Text(call.peer.name, style: const TextStyle(color: Colors.white, fontSize: 20)),
+                          const SizedBox(height: 4),
+                          Text(call.status, style: const TextStyle(color: Colors.white70)),
+                        ]),
+                      ),
+              ),
+              if (_ready && call.camOn)
+                Positioned(
+                  right: 12,
+                  top: 12,
+                  width: 110,
+                  height: 150,
+                  child: ClipRRect(borderRadius: BorderRadius.circular(8), child: RTCVideoView(_localCam, mirror: true, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)),
+                ),
+              Positioned(
+                top: 10,
+                left: 14,
+                child: Text('${call.peer.name} · ${call.status}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+              ),
+              Positioned(
+                bottom: 28,
+                left: 0,
+                right: 0,
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                  _CallBtn(icon: call.muted ? Icons.mic_off : Icons.mic, label: 'Mute', active: !call.muted, onTap: () => call.toggleMute()),
+                  _CallBtn(icon: call.camOn ? Icons.videocam : Icons.videocam_off, label: 'Camera', active: call.camOn, onTap: () => call.toggleCamera()),
+                  _CallBtn(icon: Icons.call_end, label: 'End', danger: true, onTap: () => call.end()),
+                ]),
+              ),
+            ]),
+          ),
+        );
+      },
+    );
+  }
+}
+
+class _CallBtn extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final bool active;
+  final bool danger;
+  final VoidCallback onTap;
+  const _CallBtn({required this.icon, required this.label, this.active = false, this.danger = false, required this.onTap});
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        CircleAvatar(radius: 28, backgroundColor: danger ? Colors.red : (active ? const Color(0xFF4F7CFF) : Colors.white24), child: Icon(icon, color: Colors.white)),
+        const SizedBox(height: 4),
+        Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
+      ]),
     );
   }
 }

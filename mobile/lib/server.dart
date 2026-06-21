@@ -33,6 +33,7 @@ class ReceiveServer {
   final SelfInfo self;
   final Future<bool> Function(IncomingRequest req) requestApproval;
   final void Function(String fromId, String fromName, String text, int ts) onMessage;
+  final void Function(Map<String, dynamic> sig) onSignal;
   final String Function() downloadDir;
   final void Function(Transfer t) onTransfer;
 
@@ -45,6 +46,7 @@ class ReceiveServer {
     required this.self,
     required this.requestApproval,
     required this.onMessage,
+    required this.onSignal,
     required this.downloadDir,
     required this.onTransfer,
   });
@@ -83,6 +85,7 @@ class ReceiveServer {
       if (m == 'POST' && path == '/api/upload') return _upload(req);
       if (m == 'POST' && path == '/api/cancel') return _cancel(req);
       if (m == 'POST' && path == '/api/message') return _message(req);
+      if (m == 'POST' && path == '/api/rtc') return _rtc(req);
       return _json(req, 404, {'error': 'not found'});
     } catch (e) {
       try {
@@ -212,6 +215,28 @@ class ReceiveServer {
     }
     final ts = (j['ts'] is num) ? (j['ts'] as num).toInt() : DateTime.now().millisecondsSinceEpoch;
     onMessage('${from['id']}', '${from['name'] ?? 'Unknown'}', text, ts);
+    return _json(req, 200, {'ok': true});
+  }
+
+  Future<void> _rtc(HttpRequest req) async {
+    final j = jsonDecode(await utf8.decoder.bind(req).join());
+    final from = j['from'];
+    final kind = j['kind'];
+    const allowed = {'offer', 'answer', 'decline', 'busy', 'hangup'};
+    if (from == null || from['id'] == null || !allowed.contains(kind)) {
+      return _json(req, 400, {'error': 'invalid'});
+    }
+    final sdp = (kind == 'offer' || kind == 'answer') && j['sdp'] is String ? j['sdp'] : null;
+    onSignal({
+      'peerId': '${from['id']}',
+      'peerName': '${from['name'] ?? 'Unknown'}',
+      'kind': kind,
+      'callId': j['callId']?.toString(),
+      'sdp': sdp,
+      'peerIp': req.connectionInfo?.remoteAddress.address,
+      'peerPort': from['port'] is num ? (from['port'] as num).toInt() : null,
+      'peerFingerprint': from['fingerprint']?.toString(),
+    });
     return _json(req, 200, {'ok': true});
   }
 

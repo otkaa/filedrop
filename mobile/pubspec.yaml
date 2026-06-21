@@ -17,6 +17,7 @@ dependencies:
   path_provider: ^2.1.3 # storage dirs
   file_picker: ^8.1.2 # pick files to send
   permission_handler: ^11.3.1 # runtime permissions
+  flutter_webrtc: ^0.12.5 # voice/video calls
   uuid: ^4.4.2
 
 dev_dependencies:
