@@ -30,6 +30,13 @@ const fcmTokens = new Map();
 const offlineQueue = new Map();
 const OFFLINE_QUEUE_CAP = 50;
 
+// A call offer being HELD for a code we just pushed. The offer SDP is far too big
+// for an FCM data message (4K cap), so the push is only a tiny wake signal and the
+// real offer is replayed over the socket the instant the woken app registers.
+/** code (UPPERCASE) -> { from, fromName, payload, at } */
+const pendingCalls = new Map();
+const PENDING_CALL_TTL_MS = 60000; // a held offer is stale after a minute
+
 // ── Firebase Cloud Messaging (push to wake fully-closed apps) ──────────────
 // Initializes ONCE from a service-account JSON in env FIREBASE_SERVICE_ACCOUNT.
 // If it's missing/invalid we log a warning and DISABLE push — the relay still
@@ -144,6 +151,16 @@ wss.on('connection', (ws) => {
         // Remember the push token across disconnects so a CLOSED app can be woken.
         if (msg.fcmToken) fcmTokens.set(code, msg.fcmToken);
         send(ws, { type: 'registered', code, online: peers.size });
+        // If we pushed a call to this code while it was closed, the woken app is
+        // now here — replay the held offer over the socket so it has the SDP to
+        // answer with. (Fresh offers only; a stale one is dropped.)
+        const held = pendingCalls.get(code);
+        if (held) {
+          pendingCalls.delete(code);
+          if (Date.now() - held.at < PENDING_CALL_TTL_MS) {
+            send(ws, { type: 'from', from: held.from, fromName: held.fromName, payload: held.payload });
+          }
+        }
         // Deliver any chat messages that arrived while this code was offline.
         const queued = offlineQueue.get(code);
         if (queued && queued.length) {
@@ -173,7 +190,12 @@ wss.on('connection', (ws) => {
         // detection — exactly how WhatsApp/Discord deliver calls. The native call
         // screen dedupes by callId, so an app that ALSO gets the offer over its
         // live socket won't double-ring.
+        //
+        // The push is only a tiny WAKE SIGNAL (no SDP — a real offer SDP is ~14K,
+        // far over FCM's 4K data cap). We HOLD the offer and replay it over the
+        // socket the moment the woken app registers (see the register handler).
         if (isCallOffer && token) {
+          pendingCalls.set(toCode, { from: myCode, fromName, payload, at: Date.now() });
           fcmSend({
             token,
             android: { priority: 'high' },
@@ -182,7 +204,6 @@ wss.on('connection', (ws) => {
               callId: String(payload.callId || ''),
               fromCode: String(myCode || ''),
               fromName: String(fromName || ''),
-              sdp: String(payload.sdp || ''),
             },
           }, online ? 'call+online' : 'call');
         }
