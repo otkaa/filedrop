@@ -23,3 +23,29 @@ Future<void> showMessageNotification(String title, String text, int id) async {
     await _ch.invokeMethod('notify', {'title': title, 'text': text, 'id': id});
   } catch (_) {}
 }
+
+/// Post the ringing/Answer-Decline notification for an incoming call.
+Future<void> showIncomingCallNotification(String callId, String name) async {
+  try {
+    await _ch.invokeMethod('incomingCall', {'callId': callId, 'name': name});
+  } catch (_) {}
+}
+
+Future<void> cancelIncomingCallNotification() async {
+  try {
+    await _ch.invokeMethod('cancelIncomingCall');
+  } catch (_) {}
+}
+
+/// Register a handler for Answer/Decline tapped in the incoming-call notification.
+/// The native side invokes 'onCallAction' with {action: accept|decline, callId}.
+void setCallActionHandler(void Function(String action, String? callId) handler) {
+  _ch.setMethodCallHandler((call) async {
+    if (call.method == 'onCallAction') {
+      final a = call.arguments;
+      final m = a is Map ? a : const {};
+      handler('${m['action']}', m['callId'] as String?);
+    }
+    return null;
+  });
+}

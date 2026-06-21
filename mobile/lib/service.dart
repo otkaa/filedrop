@@ -142,6 +142,15 @@ class FiledropService extends ChangeNotifier {
       // fire-and-forget; the client auto-reconnects with backoff on its own
       _relay!.connect();
 
+      // Answer/Decline tapped in the incoming-call notification routes here.
+      setCallActionHandler((action, callId) {
+        if (action == 'accept') {
+          acceptCall();
+        } else if (action == 'decline') {
+          declineCall();
+        }
+      });
+
       _discovery = Discovery(self: self, onMessage: _onDiscovery);
       await _discovery!.start();
 
@@ -447,6 +456,11 @@ class FiledropService extends ChangeNotifier {
       }
       if (peer == null) return;
       pendingIncomingCall = {'callId': callId, 'peer': peer, 'offerSdp': sig['sdp'], 'peerName': sig['peerName']};
+      // If the app isn't open in front of you, ring with an Answer/Decline
+      // notification. (When it's open, the in-app ring banner already shows.)
+      if (!inForeground) {
+        showIncomingCallNotification(callId ?? '', '${sig['peerName'] ?? peer.name}');
+      }
       notifyListeners();
       return;
     }
@@ -456,6 +470,7 @@ class FiledropService extends ChangeNotifier {
         pendingIncomingCall != null &&
         pendingIncomingCall!['callId'] == callId) {
       pendingIncomingCall = null;
+      cancelIncomingCallNotification();
       notifyListeners();
       return;
     }
@@ -517,6 +532,7 @@ class FiledropService extends ChangeNotifier {
     final inc = pendingIncomingCall;
     if (inc == null) return;
     pendingIncomingCall = null;
+    cancelIncomingCallNotification();
     _beginCall(inc['callId'] as String, inc['peer'] as Peer, isCaller: false, offerSdp: inc['offerSdp'] as String?);
   }
 
@@ -524,6 +540,7 @@ class FiledropService extends ChangeNotifier {
     final inc = pendingIncomingCall;
     if (inc == null) return;
     pendingIncomingCall = null;
+    cancelIncomingCallNotification();
     _postSignal(inc['peer'] as Peer, 'decline', inc['callId'] as String?, null);
     notifyListeners();
   }
