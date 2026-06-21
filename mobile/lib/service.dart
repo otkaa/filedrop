@@ -254,15 +254,18 @@ class FiledropService extends ChangeNotifier {
 
   String _normIp(String ip) => ip.replaceFirst(RegExp(r'^::ffff:'), '');
 
-  Future<void> _postSignal(Peer peer, String kind, String? callId, String? sdp) async {
+  Future<bool> _postSignal(Peer peer, String kind, String? callId, String? sdp) async {
     try {
-      await net.postJson(peer, '/api/rtc', {
+      final r = await net.postJson(peer, '/api/rtc', {
         'from': {'id': self.id, 'name': self.name, 'os': self.os, 'port': self.port, 'fingerprint': self.fingerprint},
         'kind': kind,
         'callId': callId,
         'sdp': sdp,
       });
-    } catch (_) {}
+      return r['status'] == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   String? startCall(String peerId) {

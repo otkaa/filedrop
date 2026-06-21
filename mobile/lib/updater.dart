@@ -5,7 +5,7 @@ import 'package:open_filex/open_filex.dart';
 import 'package:path_provider/path_provider.dart';
 
 /// Bump this on every released APK, and update mobile/version.json to match.
-const kAppVersion = '1.1.0';
+const kAppVersion = '1.1.1';
 
 const _manifestUrl = 'https://raw.githubusercontent.com/otkaa/filedrop/main/mobile/version.json';
 

@@ -12,7 +12,7 @@ class CallSession extends ChangeNotifier {
   final Peer peer;
   final bool isCaller;
   final String? offerSdp;
-  final void Function(String kind, String? sdp) sendSignal;
+  final Future<bool> Function(String kind, String? sdp) sendSignal;
   final VoidCallback onClosed;
 
   RTCPeerConnection? _pc;
@@ -63,7 +63,11 @@ class CallSession extends ChangeNotifier {
   }
 
   Future<void> _createPc() async {
-    _pc = await createPeerConnection({'iceServers': []}); // LAN only
+    _pc = await createPeerConnection({
+      'iceServers': [
+        {'urls': 'stun:stun.l.google.com:19302'},
+      ],
+    });
 
     _pc!.onTrack = (RTCTrackEvent e) {
       final track = e.track;
@@ -122,13 +126,17 @@ class CallSession extends ChangeNotifier {
 
     final offer = await _pc!.createOffer();
     await _pc!.setLocalDescription(offer);
+    _setStatus('finding network…');
     await _gather();
     final desc = await _pc!.getLocalDescription();
-    sendSignal('offer', desc!.sdp);
-    _setStatus('ringing…');
+    final sdpLen = desc?.sdp?.length ?? 0;
+    _setStatus('calling… (sdp $sdpLen)');
+    final ok = await sendSignal('offer', desc?.sdp);
+    _setStatus(ok ? 'ringing…' : "couldn't reach device");
   }
 
   Future<void> _makeAnswer(String sdp) async {
+    _setStatus('answering…');
     await _pc!.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
     await _assignTransceivers();
     final mic = await _getMic();
@@ -139,9 +147,13 @@ class CallSession extends ChangeNotifier {
 
     final answer = await _pc!.createAnswer();
     await _pc!.setLocalDescription(answer);
+    _setStatus('finding network…');
     await _gather();
     final desc = await _pc!.getLocalDescription();
-    sendSignal('answer', desc!.sdp);
+    final sdpLen = desc?.sdp?.length ?? 0;
+    _setStatus('sending answer… (sdp $sdpLen)');
+    final ok = await sendSignal('answer', desc?.sdp);
+    _setStatus(ok ? 'waiting for PC…' : "couldn't reach PC ❌");
   }
 
   Future<void> _assignTransceivers() async {
