@@ -1,0 +1,12 @@
+# Render Blueprint — deploys the Filedrop relay server.
+# In Render: New → Blueprint → connect the otkaa/filedrop repo → Apply.
+services:
+  - type: web
+    name: filedrop-relay
+    runtime: node
+    rootDir: server
+    plan: free
+    buildCommand: npm install
+    startCommand: node index.js
+    healthCheckPath: /health
+    autoDeploy: true

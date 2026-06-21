@@ -1,0 +1,15 @@
+{
+  "name": "filedrop-relay",
+  "version": "1.0.0",
+  "description": "Rendezvous + relay server so Filedrop devices can connect over the internet by code (no same-network / no VPN).",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
