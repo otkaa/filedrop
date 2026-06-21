@@ -1,0 +1,58 @@
+name: Android APK
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/**"
+      - ".github/workflows/android.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Scaffold Android project + build APK
+        run: |
+          set -e
+          flutter create --org dev.filedrop --project-name filedrop --platforms=android _app
+          rm -rf _app/lib
+          cp -r mobile/lib _app/lib
+          cp mobile/pubspec.yaml _app/pubspec.yaml
+          cp mobile/android-overlay/AndroidManifest.xml _app/android/app/src/main/AndroidManifest.xml
+          mkdir -p _app/android/app/src/main/kotlin/dev/filedrop/filedrop
+          cp mobile/android-overlay/MainActivity.kt _app/android/app/src/main/kotlin/dev/filedrop/filedrop/MainActivity.kt
+          cd _app
+          flutter pub get
+          flutter build apk --debug
+          cp build/app/outputs/flutter-apk/app-debug.apk "$GITHUB_WORKSPACE/Filedrop.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Filedrop-apk
+          path: Filedrop.apk
+
+      # rolling prerelease so the phone has a stable download URL (kept separate
+      # from the desktop's "latest" release, so it never affects desktop updates)
+      - name: Publish rolling APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: android
+          name: Filedrop Android (latest test build)
+          prerelease: true
+          files: Filedrop.apk

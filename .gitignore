@@ -3,3 +3,9 @@ dist/
 build/icon.png
 *.log
 .DS_Store
+
+# flutter
+mobile/.dart_tool/
+mobile/build/
+mobile/.flutter-plugins*
+_app/

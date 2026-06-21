@@ -1,0 +1,25 @@
+name: filedrop
+description: Filedrop — LAN file transfer, chat & calls (Android)
+publish_to: "none"
+version: 1.0.0+1
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  basic_utils: ^5.7.0 # self-signed TLS cert generation
+  crypto: ^3.0.3 # sha-256 fingerprints (matches the desktop)
+  path: ^1.9.0
+  shared_preferences: ^2.2.3 # persist identity + saved peers
+  path_provider: ^2.1.3 # storage dirs
+  file_picker: ^8.1.2 # pick files to send
+  permission_handler: ^11.3.1 # runtime permissions
+  uuid: ^4.4.2
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+
+flutter:
+  uses-material-design: true
