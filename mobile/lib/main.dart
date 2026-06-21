@@ -3,6 +3,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'call.dart';
 import 'models.dart';
 import 'service.dart';
 import 'updater.dart';
@@ -95,8 +96,8 @@ class _HomeScreenState extends State<HomeScreen> {
             selectedIndex: _tab,
             onDestinationSelected: (i) => setState(() => _tab = i),
             destinations: const [
-              NavigationDestination(icon: Icon(Icons.devices), label: 'Devices'),
-              NavigationDestination(icon: Icon(Icons.settings), label: 'Settings'),
+              NavigationDestination(icon: Icon(Icons.devices_rounded), label: 'Devices'),
+              NavigationDestination(icon: Icon(Icons.settings_rounded), label: 'Settings'),
             ],
           ),
         );
@@ -208,7 +209,7 @@ class _DeviceTile extends StatelessWidget {
               child: Text('$unread', style: const TextStyle(fontSize: 11)),
             ),
           IconButton(
-            icon: const Icon(Icons.call),
+            icon: const Icon(Icons.call_rounded),
             tooltip: 'Call',
             onPressed: () {
               final err = service.startCall(peer.id);
@@ -216,7 +217,7 @@ class _DeviceTile extends StatelessWidget {
             },
           ),
           IconButton(
-            icon: const Icon(Icons.send),
+            icon: const Icon(Icons.send_rounded),
             tooltip: 'Send files',
             onPressed: () => _sendFiles(context, peer),
           ),
@@ -250,7 +251,7 @@ class _TransferTile extends StatelessWidget {
       color: const Color(0xFF171A21),
       child: ListTile(
         dense: true,
-        leading: Icon(t.dir == TransferDir.incoming ? Icons.download : Icons.upload, size: 20),
+        leading: Icon(t.dir == TransferDir.incoming ? Icons.download_rounded : Icons.upload_rounded, size: 20),
         title: Text(t.fileName, maxLines: 1, overflow: TextOverflow.ellipsis),
         subtitle: active && t.total > 0
             ? LinearProgressIndicator(value: t.progress)
@@ -291,7 +292,7 @@ class _ChatScreenState extends State<ChatScreen> {
             backgroundColor: const Color(0xFF171A21),
             actions: [
               IconButton(
-                icon: const Icon(Icons.attach_file),
+                icon: const Icon(Icons.attach_file_rounded),
                 onPressed: peer == null ? null : () async {
                   final res = await FilePicker.platform.pickFiles(allowMultiple: true);
                   if (res == null) return;
@@ -327,7 +328,7 @@ class _ChatScreenState extends State<ChatScreen> {
                         onSubmitted: (_) => _send(),
                       ),
                     ),
-                    IconButton(icon: const Icon(Icons.send), onPressed: _send),
+                    IconButton(icon: const Icon(Icons.send_rounded), onPressed: _send),
                   ]),
                 ),
               ),
@@ -401,7 +402,7 @@ class _SettingsTabState extends State<_SettingsTab> {
         const SizedBox(height: 6),
         if (!_showAddr)
           OutlinedButton.icon(
-            icon: const Icon(Icons.visibility),
+            icon: const Icon(Icons.visibility_rounded),
             label: const Text('Show address'),
             onPressed: () => setState(() => _showAddr = true),
           )
@@ -486,9 +487,9 @@ class _CallRingBanner extends StatelessWidget {
         Text('📞 ${inc['peerName']} is calling…', style: const TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
         Row(children: [
-          FilledButton.icon(onPressed: () => service.acceptCall(), icon: const Icon(Icons.call), label: const Text('Accept')),
+          FilledButton.icon(onPressed: () => service.acceptCall(), icon: const Icon(Icons.call_rounded), label: const Text('Accept')),
           const SizedBox(width: 8),
-          OutlinedButton.icon(onPressed: () => service.declineCall(), icon: const Icon(Icons.call_end), label: const Text('Decline')),
+          OutlinedButton.icon(onPressed: () => service.declineCall(), icon: const Icon(Icons.call_end_rounded), label: const Text('Decline')),
         ]),
       ]),
     );
@@ -505,7 +506,9 @@ class _CallScreenState extends State<CallScreen> {
   final _remoteCam = RTCVideoRenderer();
   final _remoteScreen = RTCVideoRenderer();
   final _localCam = RTCVideoRenderer();
+  final _localScreen = RTCVideoRenderer();
   bool _ready = false;
+  String? _focus; // which view is enlarged; null = auto
 
   @override
   void initState() {
@@ -517,6 +520,7 @@ class _CallScreenState extends State<CallScreen> {
     await _remoteCam.initialize();
     await _remoteScreen.initialize();
     await _localCam.initialize();
+    await _localScreen.initialize();
     if (mounted) setState(() => _ready = true);
   }
 
@@ -525,6 +529,7 @@ class _CallScreenState extends State<CallScreen> {
     _remoteCam.dispose();
     _remoteScreen.dispose();
     _localCam.dispose();
+    _localScreen.dispose();
     super.dispose();
   }
 
@@ -544,53 +549,112 @@ class _CallScreenState extends State<CallScreen> {
           _remoteCam.srcObject = call.remoteCamera;
           _remoteScreen.srcObject = call.remoteScreen;
           _localCam.srcObject = call.localCamera;
+          _localScreen.srcObject = call.localScreen;
         }
-        final showScreen = call.remoteScreenOn && call.remoteScreen != null;
-        final showCam = call.remoteCamOn && call.remoteCamera != null;
+
+        final views = <String, RTCVideoRenderer>{};
+        if (call.remoteScreenOn && call.remoteScreen != null) views['remoteScreen'] = _remoteScreen;
+        if (call.remoteCamOn && call.remoteCamera != null) views['remoteCamera'] = _remoteCam;
+        if (call.screenOn && call.localScreen != null) views['localScreen'] = _localScreen;
+        if (call.camOn && call.localCamera != null) views['localCamera'] = _localCam;
+
+        final mainKey = (_focus != null && views.containsKey(_focus)) ? _focus : (views.isNotEmpty ? views.keys.first : null);
+        final pipKeys = views.keys.where((k) => k != mainKey).toList();
+
         return Scaffold(
           backgroundColor: Colors.black,
-          body: SafeArea(
-            child: Stack(children: [
-              Positioned.fill(
-                child: _ready && (showScreen || showCam)
-                    ? RTCVideoView(showScreen ? _remoteScreen : _remoteCam, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitContain)
-                    : Center(
-                        child: Column(mainAxisSize: MainAxisSize.min, children: [
-                          const CircleAvatar(radius: 44, child: Icon(Icons.person, size: 44)),
-                          const SizedBox(height: 12),
-                          Text(call.peer.name, style: const TextStyle(color: Colors.white, fontSize: 20)),
-                          const SizedBox(height: 4),
-                          Text(call.status, style: const TextStyle(color: Colors.white70)),
-                        ]),
-                      ),
-              ),
-              if (_ready && call.camOn)
-                Positioned(
-                  right: 12,
-                  top: 12,
-                  width: 110,
-                  height: 150,
-                  child: ClipRRect(borderRadius: BorderRadius.circular(8), child: RTCVideoView(_localCam, mirror: true, objectFit: RTCVideoViewObjectFit.RTCVideoViewObjectFitCover)),
-                ),
-              Positioned(
-                top: 10,
-                left: 14,
-                child: Text('${call.peer.name} · ${call.status}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
-              ),
-              Positioned(
-                bottom: 28,
-                left: 0,
-                right: 0,
-                child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
-                  _CallBtn(icon: call.muted ? Icons.mic_off : Icons.mic, label: 'Mute', active: !call.muted, onTap: () => call.toggleMute()),
-                  _CallBtn(icon: call.camOn ? Icons.videocam : Icons.videocam_off, label: 'Camera', active: call.camOn, onTap: () => call.toggleCamera()),
-                  _CallBtn(icon: Icons.call_end, label: 'End', danger: true, onTap: () => call.end()),
+          body: Stack(children: [
+            Positioned.fill(
+              child: (mainKey != null && _ready)
+                  ? GestureDetector(onTap: () => setState(() => _focus = null), child: _video(views[mainKey]!, mainKey, cover: false))
+                  : _avatar(call),
+            ),
+            // top status bar
+            Positioned(
+              top: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.only(top: 44, left: 18, right: 18, bottom: 14),
+                decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [Color(0x99000000), Color(0x00000000)])),
+                child: Row(children: [
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(call.peer.name, style: const TextStyle(color: Colors.white, fontSize: 19, fontWeight: FontWeight.w600)),
+                      Text(call.status, style: const TextStyle(color: Colors.white70, fontSize: 12.5)),
+                    ]),
+                  ),
+                  if (!call.remoteMic) const Icon(Icons.mic_off_rounded, color: Colors.white54, size: 20),
+                  if (call.remoteScreenOn) const Padding(padding: EdgeInsets.only(left: 8), child: Icon(Icons.screen_share_rounded, color: Colors.white54, size: 20)),
                 ]),
               ),
-            ]),
-          ),
+            ),
+            // picture-in-picture tiles (tap to enlarge)
+            if (pipKeys.isNotEmpty && _ready)
+              Positioned(
+                right: 12,
+                top: 92,
+                child: Column(
+                  children: [
+                    for (final k in pipKeys)
+                      Padding(
+                        padding: const EdgeInsets.only(bottom: 10),
+                        child: GestureDetector(
+                          onTap: () => setState(() => _focus = k),
+                          child: Container(
+                            decoration: BoxDecoration(borderRadius: BorderRadius.circular(14), border: Border.all(color: const Color(0x33FFFFFF)), boxShadow: const [BoxShadow(color: Color(0x66000000), blurRadius: 12)]),
+                            child: ClipRRect(borderRadius: BorderRadius.circular(14), child: SizedBox(width: 104, height: 150, child: _video(views[k]!, k, cover: true))),
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            // controls
+            Positioned(
+              bottom: 0,
+              left: 0,
+              right: 0,
+              child: Container(
+                padding: const EdgeInsets.only(top: 36, bottom: 38, left: 6, right: 6),
+                decoration: const BoxDecoration(gradient: LinearGradient(begin: Alignment.bottomCenter, end: Alignment.topCenter, colors: [Color(0xDD000000), Color(0x00000000)])),
+                child: Row(mainAxisAlignment: MainAxisAlignment.spaceEvenly, children: [
+                  _CallBtn(icon: call.muted ? Icons.mic_off_rounded : Icons.mic_rounded, label: 'Mute', danger: call.muted, onTap: () => call.toggleMute()),
+                  _CallBtn(icon: call.deafened ? Icons.headset_off_rounded : Icons.headset_mic_rounded, label: 'Deafen', danger: call.deafened, onTap: () => call.toggleDeafen()),
+                  _CallBtn(icon: call.camOn ? Icons.videocam_rounded : Icons.videocam_off_rounded, label: 'Camera', active: call.camOn, onTap: () => call.toggleCamera()),
+                  _CallBtn(icon: call.screenOn ? Icons.stop_screen_share_rounded : Icons.screen_share_rounded, label: 'Share', active: call.screenOn, onTap: () => call.toggleScreen()),
+                  _CallBtn(icon: Icons.call_end_rounded, label: 'End', end: true, onTap: () => call.end()),
+                ]),
+              ),
+            ),
+          ]),
         );
       },
+    );
+  }
+
+  Widget _video(RTCVideoRenderer r, String key, {required bool cover}) {
+    final isScreen = key.toLowerCase().contains('screen');
+    final fit = cover
+        ? RTCVideoViewObjectFit.RTCVideoViewObjectFitCover
+        : (isScreen ? RTCVideoViewObjectFit.RTCVideoViewObjectFitContain : RTCVideoViewObjectFit.RTCVideoViewObjectFitCover);
+    return Container(color: Colors.black, child: RTCVideoView(r, mirror: key == 'localCamera', objectFit: fit));
+  }
+
+  Widget _avatar(CallSession call) {
+    return Center(
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 104,
+          height: 104,
+          decoration: const BoxDecoration(shape: BoxShape.circle, gradient: LinearGradient(colors: [Color(0xFF4F7CFF), Color(0xFF7C5CFF)])),
+          child: const Icon(Icons.person_rounded, size: 54, color: Colors.white),
+        ),
+        const SizedBox(height: 18),
+        Text(call.peer.name, style: const TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.w600)),
+        const SizedBox(height: 6),
+        Text(call.status, style: const TextStyle(color: Colors.white60, fontSize: 13)),
+      ]),
     );
   }
 }
@@ -600,15 +664,32 @@ class _CallBtn extends StatelessWidget {
   final String label;
   final bool active;
   final bool danger;
+  final bool end;
   final VoidCallback onTap;
-  const _CallBtn({required this.icon, required this.label, this.active = false, this.danger = false, required this.onTap});
+  const _CallBtn({required this.icon, required this.label, this.active = false, this.danger = false, this.end = false, required this.onTap});
+
   @override
   Widget build(BuildContext context) {
+    final Gradient? grad = end
+        ? const LinearGradient(colors: [Color(0xFFFF5D6C), Color(0xFFE0344A)])
+        : active
+            ? const LinearGradient(colors: [Color(0xFF4F7CFF), Color(0xFF7C5CFF)])
+            : null;
+    final Color? bg = grad == null ? (danger ? const Color(0x33FF5D6C) : const Color(0x1FFFFFFF)) : null;
+    final List<BoxShadow>? glow = (active || end)
+        ? [BoxShadow(color: end ? const Color(0x80FF5D6C) : const Color(0x804F7CFF), blurRadius: 18, spreadRadius: 1)]
+        : null;
+    final iconColor = (danger && !end) ? const Color(0xFFFF8088) : Colors.white;
     return GestureDetector(
       onTap: onTap,
       child: Column(mainAxisSize: MainAxisSize.min, children: [
-        CircleAvatar(radius: 28, backgroundColor: danger ? Colors.red : (active ? const Color(0xFF4F7CFF) : Colors.white24), child: Icon(icon, color: Colors.white)),
-        const SizedBox(height: 4),
+        Container(
+          width: 58,
+          height: 58,
+          decoration: BoxDecoration(shape: BoxShape.circle, gradient: grad, color: bg, boxShadow: glow),
+          child: Icon(icon, color: iconColor, size: 25),
+        ),
+        const SizedBox(height: 7),
         Text(label, style: const TextStyle(color: Colors.white70, fontSize: 11)),
       ]),
     );

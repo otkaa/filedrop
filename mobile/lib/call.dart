@@ -22,16 +22,21 @@ class CallSession extends ChangeNotifier {
   RTCDataChannel? _ctrl;
   MediaStream? _micStream;
   MediaStream? _camStream;
+  MediaStream? _screenStream;
+  MediaStreamTrack? _remoteAudioTrack;
 
   // remote media (bound to renderers in the UI)
   MediaStream? remoteCamera;
   MediaStream? remoteScreen;
   MediaStream? localCamera;
+  MediaStream? localScreen;
   int _remoteVideoCount = 0;
 
   String status = 'connecting…';
   bool muted = false;
+  bool deafened = false;
   bool camOn = false;
+  bool screenOn = false;
   bool ended = false;
 
   // remote live state (via ctrl channel)
@@ -73,7 +78,9 @@ class CallSession extends ChangeNotifier {
       final track = e.track;
       final stream = e.streams.isNotEmpty ? e.streams.first : null;
       if (track.kind == 'audio') {
-        // remote audio is rendered/played by the platform automatically
+        // remote audio plays automatically; keep a ref so Deafen can mute it
+        _remoteAudioTrack = track;
+        track.enabled = !deafened;
       } else {
         final idx = _remoteVideoCount++;
         if (idx == 0) {
@@ -183,7 +190,14 @@ class CallSession extends ChangeNotifier {
     if (_micStream != null) return _micStream!.getAudioTracks().first;
     try {
       await Permission.microphone.request();
-      _micStream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
+      _micStream = await navigator.mediaDevices.getUserMedia({
+        'audio': {
+          'echoCancellation': true,
+          'noiseSuppression': true, // voice suppression
+          'autoGainControl': true,
+        },
+        'video': false,
+      });
       return _micStream!.getAudioTracks().first;
     } catch (_) {
       return null;
@@ -223,6 +237,41 @@ class CallSession extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> toggleDeafen() async {
+    deafened = !deafened;
+    _remoteAudioTrack?.enabled = !deafened;
+    if (deafened && !muted) {
+      await toggleMute(); // deafening also mutes your mic, like the desktop
+    }
+    notifyListeners();
+  }
+
+  Future<void> toggleScreen() async {
+    if (screenOn) {
+      _screenStream?.getTracks().forEach((t) => t.stop());
+      _screenStream = null;
+      localScreen = null;
+      screenOn = false;
+      if (_screenTx != null) await _screenTx!.sender.replaceTrack(null);
+    } else {
+      try {
+        _screenStream = await navigator.mediaDevices.getDisplayMedia({'video': true, 'audio': false});
+        final track = _screenStream!.getVideoTracks().first;
+        if (_screenTx != null) await _screenTx!.sender.replaceTrack(track);
+        localScreen = _screenStream;
+        screenOn = true;
+        // stopped from the system "casting" notification
+        track.onEnded = () {
+          if (screenOn) toggleScreen();
+        };
+      } catch (_) {
+        return;
+      }
+    }
+    _sendCtrl();
+    notifyListeners();
+  }
+
   void _bindCtrl(RTCDataChannel ch) {
     ch.onDataChannelState = (state) {
       if (state == RTCDataChannelState.RTCDataChannelOpen) _sendCtrl();
@@ -246,7 +295,7 @@ class CallSession extends ChangeNotifier {
       _ctrl!.send(RTCDataChannelMessage(_encode({
         'mic': !muted && _micStream != null,
         'cam': camOn,
-        'screen': false,
+        'screen': screenOn,
       })));
     } catch (_) {}
   }
@@ -276,12 +325,13 @@ class CallSession extends ChangeNotifier {
     ended = true;
     if (message != null) status = message;
     if (notifyPeer) sendSignal('hangup', null);
-    for (final s in [_micStream, _camStream]) {
+    for (final s in [_micStream, _camStream, _screenStream]) {
       s?.getTracks().forEach((t) => t.stop());
       await s?.dispose();
     }
     _micStream = null;
     _camStream = null;
+    _screenStream = null;
     try {
       await _ctrl?.close();
     } catch (_) {}
