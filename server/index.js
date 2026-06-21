@@ -21,7 +21,9 @@ const PORT = process.env.PORT || 8080;
 const peers = new Map();
 
 function norm(code) {
-  return String(code || '').toUpperCase().replace(/\s+/g, '');
+  // forgiving: case-insensitive, ignore dashes/spaces/punctuation so a user can
+  // type "k7px-9m2q", "K7PX 9M2Q" or "K7PX9M2Q" and they all match.
+  return String(code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
 
 function send(ws, obj) {
