@@ -662,12 +662,6 @@ function renderUpdate() {
       status = 'Filedrop ' + ver;
   }
 
-  // LAN nudge: a peer is on a newer version but the feed hasn't confirmed yet
-  if (!show && u.peerNewer && ['idle', 'none', 'disabled', 'error'].includes(u.state)) {
-    show = true;
-    html = `<div class="u-text"><strong>A device on your network is on v${escapeHtml(u.peerNewer)}</strong> — you have ${ver}</div><button class="btn small" id="u-check">Check</button>`;
-  }
-
   banner.classList.toggle('hidden', !show);
   banner.innerHTML = show ? html : '';
   if (statusEl) statusEl.textContent = status;

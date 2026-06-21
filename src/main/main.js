@@ -43,7 +43,6 @@ let self = null;
 let messages = null;
 let updater = null;
 let relay = null; // internet rendezvous/relay client (additive; LAN unchanged)
-let lastUpdateNudge = 0;
 
 const transfers = new Map(); // id -> transfer update
 const pendingRequests = new Map(); // id -> { resolve, timer, data }
@@ -136,7 +135,6 @@ async function init() {
   });
   discovery.on('peers', () => {
     pushState();
-    maybeUpdateNudge();
   });
   discovery.on('error', (err) => console.error('[discovery]', err.message));
   discovery.setStealth(settings.get('stealth'));
@@ -1072,31 +1070,6 @@ function setupUpdater() {
   updater.start();
 }
 
-/** If a peer on the LAN is running a newer version, hit the real feed now. */
-function maybeUpdateNudge() {
-  if (!updater || !updater.enabled || !self) return;
-  const peers = discovery ? discovery.getPeers() : [];
-  const newer = peers.some((p) => p.version && verGt(p.version, self.version));
-  if (!newer) return;
-  const now = Date.now();
-  if (now - lastUpdateNudge < 60000) return; // throttle to once a minute
-  lastUpdateNudge = now;
-  updater.check(false);
-}
-
-/** Semver-ish a > b for simple x.y.z versions. */
-function verGt(a, b) {
-  const pa = String(a).split('.').map((n) => parseInt(n, 10) || 0);
-  const pb = String(b).split('.').map((n) => parseInt(n, 10) || 0);
-  for (let i = 0; i < 3; i++) {
-    const x = pa[i] || 0;
-    const y = pb[i] || 0;
-    if (x > y) return true;
-    if (x < y) return false;
-  }
-  return false;
-}
-
 // ---------------------------------------------------------------------------
 // Receiving approval
 // ---------------------------------------------------------------------------
@@ -1206,13 +1179,11 @@ function buildState() {
   // include peers with unread but no stored last (shouldn't happen, defensive)
   for (const [id, n] of unread) if (!chats[id]) chats[id] = { unread: n, last: null };
 
-  // newest version seen among LAN peers (a nudge even before the feed check)
-  let peerNewer = null;
-  for (const p of merged) {
-    if (p.version && verGt(p.version, VERSION) && (!peerNewer || verGt(p.version, peerNewer))) {
-      peerNewer = p.version;
-    }
-  }
+  // (Removed the LAN cross-device version nudge: the phone updates ahead of the
+  // PC and they share a version line, so it nagged on every phone update. The
+  // PC's own GitHub auto-updater — startup + every 6h + manual — handles real
+  // desktop updates.)
+  const peerNewer = null;
 
   // saved (manual / VPN) addresses with live status, for Settings management
   const onlineKeys = new Set(Array.from(manualPeers.values()).map((p) => p.savedKey).filter(Boolean));
