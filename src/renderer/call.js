@@ -128,8 +128,13 @@ function createPc() {
 async function makeOffer() {
   const mic = await getMic();
   tx.audio = pc.addTransceiver(mic || 'audio', { direction: 'sendrecv' });
-  tx.camera = pc.addTransceiver('video', { direction: 'sendrecv' });
-  tx.screen = pc.addTransceiver('video', { direction: 'sendrecv' });
+  // Attach a real MediaStream (so SDP carries a=msid:<id>) to each video sender.
+  // Without a stream id, flutter_webrtc on Android gets an empty streams array
+  // and renders nothing. Audio doesn't need this.
+  const camOutStream = new MediaStream();
+  const screenOutStream = new MediaStream();
+  tx.camera = pc.addTransceiver('video', { direction: 'sendrecv', streams: [camOutStream] });
+  tx.screen = pc.addTransceiver('video', { direction: 'sendrecv', streams: [screenOutStream] });
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
@@ -141,6 +146,13 @@ async function makeOffer() {
 async function makeAnswer(offerSdp) {
   await pc.setRemoteDescription({ type: 'offer', sdp: offerSdp });
   assignTransceivers();
+  // The answerer's transceivers come from the remote offer and have no
+  // associated stream, so their outgoing SDP would carry a=msid:- and the phone
+  // would render nothing. Give the video senders real streams (a=msid:<id>).
+  const camOutStream = new MediaStream();
+  const screenOutStream = new MediaStream();
+  if (tx.camera && tx.camera.sender.setStreams) tx.camera.sender.setStreams(camOutStream);
+  if (tx.screen && tx.screen.sender.setStreams) tx.screen.sender.setStreams(screenOutStream);
   const mic = await getMic();
   if (mic && tx.audio) await tx.audio.sender.replaceTrack(mic);
   // make every line bidirectional so we can enable cam/screen later w/o reneg

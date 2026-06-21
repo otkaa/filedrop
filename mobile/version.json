@@ -1,5 +1,5 @@
 {
-  "version": "1.4.5",
+  "version": "1.4.6",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Code contacts + chats now persist across restarts, message notifications, only code contacts shown (no more same-network list), address UI removed."
+  "notes": "Screen share and camera now actually render on the phone (attach a real stream id to outgoing video so Android can display it)."
 }

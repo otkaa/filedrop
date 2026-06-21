@@ -25,6 +25,11 @@ class CallSession extends ChangeNotifier {
   MediaStream? _camStream;
   MediaStream? _screenStream;
   MediaStreamTrack? _remoteAudioTrack;
+  // Placeholder local streams associated with the camera/screen senders so the
+  // outgoing SDP carries a real msid (stream id). Without it the peer receives
+  // the track with an empty streams list and can't render it (renders black).
+  MediaStream? _camLocalStream;
+  MediaStream? _screenLocalStream;
 
   // remote media (bound to renderers in the UI)
   MediaStream? remoteCamera;
@@ -140,13 +145,15 @@ class CallSession extends ChangeNotifier {
       init: RTCRtpTransceiverInit(direction: TransceiverDirection.SendRecv),
     );
     if (mic != null) await _audioTx!.sender.replaceTrack(mic);
+    _camLocalStream = await createLocalMediaStream('filedrop-cam');
+    _screenLocalStream = await createLocalMediaStream('filedrop-screen');
     _cameraTx = await _pc!.addTransceiver(
       kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
-      init: RTCRtpTransceiverInit(direction: TransceiverDirection.SendRecv),
+      init: RTCRtpTransceiverInit(direction: TransceiverDirection.SendRecv, streams: [_camLocalStream!]),
     );
     _screenTx = await _pc!.addTransceiver(
       kind: RTCRtpMediaType.RTCRtpMediaTypeVideo,
-      init: RTCRtpTransceiverInit(direction: TransceiverDirection.SendRecv),
+      init: RTCRtpTransceiverInit(direction: TransceiverDirection.SendRecv, streams: [_screenLocalStream!]),
     );
 
     final offer = await _pc!.createOffer();
@@ -162,6 +169,12 @@ class CallSession extends ChangeNotifier {
     _setStatus('Connecting…');
     await _pc!.setRemoteDescription(RTCSessionDescription(sdp, 'offer'));
     await _assignTransceivers();
+    // Associate a stream with our outgoing camera/screen senders so the caller
+    // receives them with a real msid and can render them (else: black/no video).
+    _camLocalStream = await createLocalMediaStream('filedrop-cam');
+    _screenLocalStream = await createLocalMediaStream('filedrop-screen');
+    await _cameraTx?.sender.setStreams([_camLocalStream!]);
+    await _screenTx?.sender.setStreams([_screenLocalStream!]);
     final mic = await _getMic();
     if (mic != null && _audioTx != null) await _audioTx!.sender.replaceTrack(mic);
     await _audioTx?.setDirection(TransceiverDirection.SendRecv);
@@ -411,13 +424,15 @@ class CallSession extends ChangeNotifier {
     stopCallService(); // tear down the ongoing-call notification + keep-alive
     if (message != null) status = message;
     if (notifyPeer) sendSignal('hangup', null);
-    for (final s in [_micStream, _camStream, _screenStream]) {
+    for (final s in [_micStream, _camStream, _screenStream, _camLocalStream, _screenLocalStream]) {
       s?.getTracks().forEach((t) => t.stop());
       await s?.dispose();
     }
     _micStream = null;
     _camStream = null;
     _screenStream = null;
+    _camLocalStream = null;
+    _screenLocalStream = null;
     try {
       await _ctrl?.close();
     } catch (_) {}
