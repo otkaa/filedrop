@@ -1,0 +1,57 @@
+appId: com.kavelashvili.filedrop
+productName: Filedrop
+copyright: Copyright © 2026 v.kavelashvili
+
+directories:
+  output: dist
+  buildResources: build
+
+# Update feed. Clients check this GitHub repo's Releases for new versions.
+publish:
+  provider: github
+  owner: otkaa
+  repo: filedrop
+
+files:
+  - "src/**/*"
+  - "build/icon.png"
+  - "package.json"
+  - "!**/*.map"
+
+# ---- Windows ----------------------------------------------------------------
+win:
+  icon: build/icon.png
+  target:
+    - target: nsis        # standard installer
+      arch: [x64]
+    - target: portable    # single .exe, no install — "just download and open"
+      arch: [x64]
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Filedrop
+
+portable:
+  artifactName: ${productName}-${version}-portable.${ext}
+
+# ---- Linux (Arch + others) --------------------------------------------------
+linux:
+  icon: build/icon.png
+  category: Utility
+  # maintainer (with email) + homepage are REQUIRED by electron-builder's fpm
+  # pipeline (pacman); without them `electron-builder --linux` throws and no
+  # Linux artifact is produced.
+  maintainer: "v.kavelashvili <v.kavelashvili@gmail.com>"
+  synopsis: Send files across your LAN, no cloud
+  description: Tray-resident peer-to-peer file transfer for your local network.
+  desktop:
+    StartupWMClass: Filedrop
+  target:
+    - target: AppImage    # universal — download, chmod +x, run
+      arch: [x64]
+    - target: pacman      # native Arch Linux package
+      arch: [x64]

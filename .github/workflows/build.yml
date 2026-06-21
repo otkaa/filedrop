@@ -1,0 +1,43 @@
+name: Build & Publish
+
+# Push a version tag (e.g. v1.0.1) to build for Windows + Linux and upload the
+# installers AND the update metadata (latest.yml / latest-linux.yml) to a GitHub
+# Release. electron-updater clients read that release to auto-update.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write # needed to create/update the GitHub Release
+
+jobs:
+  release:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            flag: --win
+          - os: ubuntu-latest
+            flag: --linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build icon
+        run: npm run icon
+
+      # --publish always uploads the artifacts + latest*.yml to the GitHub
+      # Release for this tag (created as a draft — publish it to go live).
+      - name: Build & publish
+        run: npx electron-builder ${{ matrix.flag }} --publish always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

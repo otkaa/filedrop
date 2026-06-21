@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self' blob: mediastream:;"
+    />
+    <title>Filedrop Call</title>
+    <link rel="stylesheet" href="call.css" />
+  </head>
+  <body>
+    <header class="callbar">
+      <div class="who">
+        <span id="peer-name">…</span>
+        <span id="status" class="status">connecting…</span>
+      </div>
+      <div id="remote-badges" class="badges"></div>
+    </header>
+
+    <main id="stage" class="stage">
+      <!-- remote media -->
+      <video id="remote-screen" class="remote-screen hidden" autoplay playsinline></video>
+      <video id="remote-camera" class="remote-camera hidden" autoplay playsinline></video>
+      <audio id="remote-audio" autoplay></audio>
+
+      <div id="placeholder" class="placeholder">
+        <div class="avatar" id="peer-avatar">🎧</div>
+        <div id="placeholder-text">Audio call — no video</div>
+      </div>
+
+      <!-- local previews (picture-in-picture) -->
+      <div class="local-tiles">
+        <video id="local-camera" class="local-tile hidden" autoplay playsinline muted></video>
+        <video id="local-screen" class="local-tile hidden" autoplay playsinline muted></video>
+      </div>
+    </main>
+
+    <!-- controls -->
+    <footer class="controls">
+      <div class="ctrl-group screen-quality hidden" id="live-quality">
+        <label>FPS
+          <select id="live-fps">
+            <option value="15">15</option>
+            <option value="30" selected>30</option>
+            <option value="60">60</option>
+          </select>
+        </label>
+        <label>Quality
+          <select id="live-q">
+            <option value="720">720p</option>
+            <option value="1080" selected>1080p</option>
+            <option value="source">Source</option>
+          </select>
+        </label>
+      </div>
+
+      <button id="btn-mic" class="cbtn" title="Mute (mic)"><span class="ic">🎙️</span><span class="lbl">Mute</span></button>
+      <button id="btn-deafen" class="cbtn" title="Deafen"><span class="ic">🔊</span><span class="lbl">Deafen</span></button>
+      <button id="btn-camera" class="cbtn" title="Toggle camera"><span class="ic">📷</span><span class="lbl">Camera</span></button>
+      <button id="btn-screen" class="cbtn" title="Share screen"><span class="ic">🖥️</span><span class="lbl">Share</span></button>
+      <button id="btn-hangup" class="cbtn hangup" title="Hang up"><span class="ic">📞</span><span class="lbl">Leave</span></button>
+    </footer>
+
+    <!-- screen-share source picker -->
+    <div id="share-modal" class="modal hidden">
+      <div class="modal-card">
+        <h3>Share your screen</h3>
+        <div class="share-opts">
+          <label>FPS
+            <select id="pick-fps">
+              <option value="15">15</option>
+              <option value="30" selected>30</option>
+              <option value="60">60</option>
+            </select>
+          </label>
+          <label>Quality
+            <select id="pick-q">
+              <option value="720">720p</option>
+              <option value="1080" selected>1080p</option>
+              <option value="source">Source</option>
+            </select>
+          </label>
+        </div>
+        <div id="share-sources" class="share-sources">Loading sources…</div>
+        <div class="modal-actions">
+          <button id="share-cancel" class="btn ghost">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden"></div>
+
+    <script src="call.js"></script>
+  </body>
+</html>

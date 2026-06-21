@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+    />
+    <title>Filedrop</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <!-- Title bar (draggable, frameless window) -->
+    <header class="titlebar">
+      <div class="brand">
+        <span class="logo">⤴</span>
+        <span class="title">Filedrop</span>
+      </div>
+      <div class="titlebar-actions">
+        <button id="btn-min" class="icon-btn" title="Hide to tray">—</button>
+      </div>
+    </header>
+
+    <!-- Self / status -->
+    <div class="selfbar">
+      <div class="selfname">
+        This device: <strong id="self-name">…</strong>
+        <span id="self-os" class="muted"></span>
+      </div>
+      <div id="stealth-pill" class="pill hidden">Stealth</div>
+    </div>
+
+    <!-- update banner (shown on any tab when an update is available) -->
+    <div id="update-banner" class="update-banner hidden"></div>
+
+    <!-- Tabs -->
+    <nav class="tabs">
+      <button class="tab active" data-tab="devices">Devices</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <main>
+      <!-- DEVICES TAB -->
+      <section id="tab-devices" class="tabpane active">
+        <!-- incoming call ring (shown over any sub-view) -->
+        <div id="call-ring" class="ring hidden"></div>
+
+        <!-- LIST sub-view -->
+        <div id="view-list">
+          <!-- pending incoming requests -->
+          <div id="requests"></div>
+
+          <!-- staged files to send -->
+          <div id="staging" class="staging hidden">
+            <div class="staging-head">
+              <span id="staging-summary">No files selected</span>
+              <button id="staging-clear" class="link">clear</button>
+            </div>
+            <div class="hint">Pick a device below to send to.</div>
+          </div>
+
+          <div class="row between">
+            <h2>Nearby devices</h2>
+            <div class="row" style="gap: 12px">
+              <button id="btn-add-link" class="link">+ by address</button>
+              <button id="btn-pick" class="btn small">Choose files…</button>
+            </div>
+          </div>
+
+          <div id="devices" class="devices"></div>
+          <div id="devices-empty" class="empty">
+            <div class="empty-emoji">📡</div>
+            <p>Looking for devices on your network…</p>
+            <p class="muted small">
+              Make sure the other device has Filedrop open and is on the same Wi-Fi/LAN.
+            </p>
+            <button id="btn-add" class="link">Add a device by address</button>
+          </div>
+
+          <!-- transfers -->
+          <div class="row between transfers-head">
+            <h2>Transfers</h2>
+            <button id="btn-clear" class="link">clear finished</button>
+          </div>
+          <div id="transfers" class="transfers"></div>
+          <div id="transfers-empty" class="muted small pad">No transfers yet.</div>
+        </div>
+
+        <!-- CONVERSATION sub-view -->
+        <div id="view-convo" class="convo hidden">
+          <div class="convo-head">
+            <button id="convo-back" class="icon-btn" title="Back">←</button>
+            <div class="convo-title">
+              <span id="convo-name">Device</span>
+              <span id="convo-sub" class="muted small"></span>
+            </div>
+            <div class="convo-actions">
+              <button id="convo-send" class="btn small ghost" title="Send file">📎</button>
+              <button id="convo-call" class="btn small" title="Voice/video call">📞 Call</button>
+            </div>
+          </div>
+          <div id="chat-messages" class="chat-messages"></div>
+          <div class="chat-input-row">
+            <input id="chat-input" type="text" placeholder="Message…" maxlength="8000" />
+            <button id="chat-send" class="btn small">Send</button>
+          </div>
+        </div>
+      </section>
+
+      <!-- SETTINGS TAB -->
+      <section id="tab-settings" class="tabpane">
+        <label class="field">
+          <span>Device name</span>
+          <input id="set-name" type="text" maxlength="40" placeholder="My Device" />
+        </label>
+
+        <!-- This device's address(es) — share so a friend can add you -->
+        <div class="field">
+          <span>Your address <span class="muted small">(share this so others can add you)</span></span>
+          <div id="my-addresses" class="addr-list"></div>
+        </div>
+
+        <div class="field">
+          <span>Download folder</span>
+          <div class="folder">
+            <input id="set-folder" type="text" readonly />
+            <button id="btn-folder" class="btn small">Change</button>
+            <button id="btn-openfolder" class="btn small ghost">Open</button>
+          </div>
+        </div>
+
+        <div class="toggle">
+          <div>
+            <div class="toggle-label">Start on login</div>
+            <div class="toggle-desc">Launch Filedrop to the tray when you sign in.</div>
+          </div>
+          <label class="switch"><input id="set-autostart" type="checkbox" /><span></span></label>
+        </div>
+
+        <div class="toggle">
+          <div>
+            <div class="toggle-label">Hide IP addresses</div>
+            <div class="toggle-desc">Show device names only — never display raw IPs.</div>
+          </div>
+          <label class="switch"><input id="set-hideips" type="checkbox" /><span></span></label>
+        </div>
+
+        <div class="toggle">
+          <div>
+            <div class="toggle-label">Stealth mode (invisible)</div>
+            <div class="toggle-desc">
+              Stop broadcasting. Others can't see you unless you share your address. You can still
+              send out.
+            </div>
+          </div>
+          <label class="switch"><input id="set-stealth" type="checkbox" /><span></span></label>
+        </div>
+
+        <!-- Saved / VPN addresses (auto-reconnect) -->
+        <div class="field" id="saved-field" style="display: none">
+          <span>Saved addresses <span class="muted small">(reconnect automatically)</span></span>
+          <div id="saved-list" class="addr-list"></div>
+        </div>
+
+        <div class="toggle">
+          <div>
+            <div class="toggle-label">Updates</div>
+            <div class="toggle-desc" id="update-status">Filedrop <span id="about-version"></span></div>
+          </div>
+          <button id="btn-update-check" class="btn small ghost">Check</button>
+        </div>
+
+        <div class="about">
+          <div class="muted small">Files & calls go directly over your LAN, encrypted. No cloud.</div>
+        </div>
+
+        <button id="btn-quit" class="btn danger wide">Quit Filedrop</button>
+      </section>
+    </main>
+
+    <!-- Add-device modal -->
+    <div id="modal" class="modal hidden">
+      <div class="modal-card">
+        <h3>Add device by address</h3>
+        <p class="muted small">
+          Connect to a device by its address — for stealth devices, or <strong>over a VPN</strong>
+          (where auto-discovery doesn't work). The other person can read their address from
+          <em>Settings → Your address</em>. Saved addresses reconnect automatically.
+        </p>
+        <input id="add-host" type="text" placeholder="192.168.1.42" />
+        <input id="add-port" type="text" placeholder="Port (optional)" />
+        <div id="add-error" class="error small"></div>
+        <div class="modal-actions">
+          <button id="add-cancel" class="btn ghost">Cancel</button>
+          <button id="add-ok" class="btn">Add</button>
+        </div>
+      </div>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>
