@@ -67,6 +67,8 @@ let fcmError = null; // why push is off, surfaced in /health for diagnostics
 
 // Diagnostics: result of the most recent push attempt, surfaced via /health.
 let lastPush = null;
+// Diagnostics: how the most recent 'to' message was routed (forward vs offline push).
+let lastTo = null;
 
 // Fire-and-forget FCM send. Never throws; a bad/expired token logs and continues.
 async function fcmSend(message, label) {
@@ -100,7 +102,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     // `fcm` = is push enabled (service account loaded); `tokens` = how many of
     // the online codes registered an FCM token. Diagnostics, no secrets.
-    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens: fcmTokens.size, fcmError, lastPush }));
+    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens: fcmTokens.size, fcmError, lastTo, lastPush }));
     return;
   }
   res.writeHead(200, { 'content-type': 'text/plain' });
@@ -167,6 +169,8 @@ wss.on('connection', (ws) => {
           const token = fcmTokens.get(toCode);
           const payload = msg && msg.payload;
           const fromName = me ? me.name : undefined;
+          lastTo = { at: Date.now(), toCode, route: 'offline', hasToken: !!token,
+                     k: payload && payload.k, sig: payload && payload.sig };
           if (token && payload && typeof payload === 'object') {
             if (payload.k === 'rtc' && payload.sig === 'offer') {
               // High-priority data-only push to wake the app for an incoming call.
@@ -203,6 +207,8 @@ wss.on('connection', (ws) => {
           }
           return;
         }
+        lastTo = { at: Date.now(), toCode, route: 'forward',
+                   k: msg.payload && msg.payload.k, sig: msg.payload && msg.payload.sig };
         send(target.ws, {
           type: 'from',
           from: myCode,
