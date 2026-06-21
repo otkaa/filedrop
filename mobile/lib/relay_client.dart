@@ -27,6 +27,9 @@ class RelayClient {
   /// Incoming call signaling from a peer (payload.k == 'rtc').
   final void Function(String from, String fromName, Map<String, dynamic> payload) onSignal;
 
+  /// Delivery/read receipt from a peer (payload.k == 'ack').
+  final void Function(String from, Map<String, dynamic> payload)? onAck;
+
   /// Fired once we're registered (and on every successful re-register).
   final void Function(String code)? onReady;
 
@@ -49,6 +52,7 @@ class RelayClient {
     required this.fingerprint,
     required this.onMessage,
     required this.onSignal,
+    this.onAck,
     this.onReady,
     this.onCodeTaken,
   });
@@ -139,6 +143,8 @@ class RelayClient {
             onMessage(from, fromName, p);
           } else if (k == 'rtc') {
             onSignal(from, fromName, p);
+          } else if (k == 'ack') {
+            onAck?.call(from, p);
           }
           break;
         }

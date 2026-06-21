@@ -1,5 +1,5 @@
 {
-  "version": "1.4.7",
+  "version": "1.5.0",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Screen sharing from the phone no longer crashes the call (Android 14 media-projection foreground service)."
+  "notes": "Message ticks: hourglass (sending) / one check (sent) / two checks (delivered) / blue (read)."
 }

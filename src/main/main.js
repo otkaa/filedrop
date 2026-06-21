@@ -53,6 +53,14 @@ const unread = new Map(); // peerId -> unread message count
 const lastNotify = new Map(); // peerId -> ts of last chat notification (throttle)
 let activeConvo = null; // peerId the renderer currently has open, or null
 
+// WhatsApp-style receipts (relay peers only):
+// - relayOutbox queues messages composed while the relay is down ('pending');
+//   they flush + flip to 'sent' on the next 'ready' (re-register).
+// - outgoingById indexes our own sent messages by their wire id so an inbound
+//   {k:'ack', ack:'delivered', id} can find the right bubble to update.
+const relayOutbox = []; // [{ peerId, code, text, ts, id }] awaiting a connected relay
+const outgoingById = new Map(); // id -> { peerId } for fast ack -> message lookup
+
 // calls
 let callWindow = null;
 let activeCall = null; // { callId, peer, role, remoteEnded, answered }
@@ -448,6 +456,10 @@ function wireIpc() {
   ipcMain.handle('get-messages', (_e, peerId) => {
     activeConvo = peerId;
     unread.set(peerId, 0);
+    // Opening a chat = "I've read everything". Tell a relay peer so their
+    // outgoing ticks turn cyan (matches the phone's read-receipt behaviour).
+    const peer = lookupPeer(peerId);
+    if (relay && isRelayPeer(peer)) relay.sendTo(peer.relayCode, { k: 'ack', ack: 'read' });
     pushState();
     return messages ? messages.get(peerId) : [];
   });
@@ -664,12 +676,37 @@ function setupRelay(tls) {
     pushState();
     return next;
   });
-  relay.on('ready', () => pushState());
+  relay.on('ready', () => {
+    flushRelayOutbox(); // deliver anything queued while we were offline
+    pushState();
+  });
   relay.on('status', () => pushState());
   relay.on('message', (m) => relayOnIncomingMessage(m));
   relay.on('signal', (m) => relayOnIncomingSignal(m));
+  relay.on('ack', (m) => relayOnIncomingAck(m));
   relay.on('offline', () => {});
   relay.connect();
+}
+
+/**
+ * The relay (re)connected: drain any messages that were composed while it was
+ * down. Each queued message is sent with its original id/ts and flips from
+ * 'pending' to 'sent'. Anything that still can't be handed off (socket raced
+ * closed again) stays queued for the next 'ready'.
+ */
+function flushRelayOutbox() {
+  if (!relay || !relayOutbox.length) return;
+  const pending = relayOutbox.splice(0, relayOutbox.length);
+  let changed = false;
+  for (const item of pending) {
+    const sent = relay.sendTo(item.code, { k: 'msg', text: item.text, ts: item.ts, id: item.id });
+    if (sent) {
+      if (messages.setStatusById(item.peerId, item.id, 'sent', ['pending'])) changed = true;
+    } else {
+      relayOutbox.push(item); // still down — requeue for the next 'ready'
+    }
+  }
+  if (changed) pushState();
 }
 
 /** Find-or-create a relay-only peer for an incoming code. */
@@ -727,6 +764,49 @@ function relayOnIncomingMessage(m) {
     text: text.slice(0, 8000),
     ts: Number(payload.ts) || Date.now(),
   });
+
+  // Receipts (relay only): tell the sender we received it, and — if the user is
+  // actively looking at this conversation — that we've read it. Mirrors the
+  // phone, which sends the same {k:'ack', ack:'delivered'|'read'} payloads.
+  const code = peer.relayCode;
+  const id = typeof payload.id === 'string' ? payload.id : null;
+  if (relay && code) {
+    if (id) relay.sendTo(code, { k: 'ack', ack: 'delivered', id });
+    const viewing = activeConvo === peer.id && win && win.isVisible() && win.isFocused();
+    if (viewing) relay.sendTo(code, { k: 'ack', ack: 'read' });
+  }
+}
+
+/**
+ * Inbound delivery/read receipt for messages WE sent (relay only).
+ *   ack:'delivered' + id -> that one message: 'sent' -> 'delivered'
+ *   ack:'read' (no id)   -> every message to this peer that's 'sent'/'delivered'
+ *                           becomes 'read'
+ * Mutating only forward-going transitions keeps a late/duplicate ack harmless.
+ */
+function relayOnIncomingAck(m) {
+  const payload = m.payload || {};
+  const peer = ensureRelayPeer(m.from, m.fromName);
+  if (!peer) return;
+  let changed = false;
+  if (payload.ack === 'delivered' && typeof payload.id === 'string') {
+    // resolve the message by its id (the Map is authoritative for which
+    // conversation it belongs to); fall back to the ack's sender code.
+    const owner = outgoingById.get(payload.id);
+    const peerId = owner ? owner.peerId : peer.id;
+    changed = messages.setStatusById(peerId, payload.id, 'delivered', ['sent']);
+  } else if (payload.ack === 'read') {
+    changed = messages.setStatusAll(peer.id, 'read', ['sent', 'delivered']);
+    // a "read everything" ack means none of this peer's ids need tracking anymore
+    for (const [id, owner] of outgoingById) if (owner.peerId === peer.id) outgoingById.delete(id);
+  }
+  if (changed) {
+    // refresh the open conversation's bubbles, then the list badges/state
+    if (win && !win.isDestroyed()) {
+      win.webContents.send('messages-updated', { peerId: peer.id, messages: messages.get(peer.id) });
+    }
+    pushState();
+  }
 }
 
 /** Incoming relay call signaling -> the same path the HTTPS server uses. */
@@ -826,35 +906,50 @@ async function sendMessage(deviceId, text) {
   text = String(text || '').slice(0, 8000).trim();
   if (!text) return { ok: false, error: 'Empty message' };
   const ts = Date.now();
+  const id = crypto.randomUUID(); // wire id so the peer can ack THIS message
   const peer = lookupPeer(deviceId);
   // The renderer appends the outgoing bubble optimistically and updates it from
   // this return value, so we DON'T echo an unconditional "delivered" bubble.
-  const stored = messages.add(deviceId, { dir: 'out', text, ts });
+  // Start every outgoing message at 'pending' (⏳); we promote it once it's
+  // actually handed to a connected relay, and again on each receipt.
+  const stored = messages.add(deviceId, { dir: 'out', text, ts, id, status: 'pending' });
+  outgoingById.set(id, { peerId: deviceId });
   pushState();
   if (!peer) {
     stored.failed = true;
-    return { ok: false, error: 'Device is offline', ts };
+    return { ok: false, error: 'Device is offline', ts, id, status: 'pending' };
   }
 
   // relay-only peer (no ip): deliver over the internet relay by code
   if (isRelayPeer(peer)) {
-    const sent = relay && relay.sendTo(peer.relayCode, { k: 'msg', text, ts });
+    const relayUp = !!(relay && relay.connected && relay.registered);
+    const sent = relayUp && relay.sendTo(peer.relayCode, { k: 'msg', text, ts, id });
     if (!sent) {
-      stored.failed = true;
-      return { ok: false, error: 'Not connected to relay', ts };
+      // Relay is down: keep the message 'pending' and queue it; flushRelayOutbox()
+      // delivers + flips it to 'sent' on the next 'ready'. Not a failure — it'll
+      // go out automatically, just like WhatsApp's clock-tick state.
+      relayOutbox.push({ peerId: deviceId, code: peer.relayCode, text, ts, id });
+      return { ok: true, ts, id, status: 'pending', queued: true };
     }
-    // the relay is fire-and-forget; we can't confirm the peer was online, but a
-    // delivered frame to the server is our best-effort "sent".
-    return { ok: true, ts };
+    stored.status = 'sent';
+    messages._save && messages._save();
+    pushState();
+    // the relay is fire-and-forget; a delivered frame to the server is our
+    // best-effort 'sent'. delivered/read come back later as acks.
+    return { ok: true, ts, id, status: 'sent' };
   }
 
+  // LAN/manual peer: no receipt protocol, so a successful POST is 'sent'.
   try {
     const r = await postJson(peer, '/api/message', { from: selfFrom(), text, ts });
     if (!r || r.status !== 200) throw new Error('not delivered');
-    return { ok: true, ts };
+    stored.status = 'sent';
+    messages._save && messages._save();
+    pushState();
+    return { ok: true, ts, id, status: 'sent' };
   } catch (err) {
     stored.failed = true;
-    return { ok: false, error: 'Could not deliver (device offline?)', ts };
+    return { ok: false, error: 'Could not deliver (device offline?)', ts, id, status: 'pending' };
   }
 }
 
@@ -1325,7 +1420,16 @@ function buildState() {
     const last = lastByPeer[id];
     chats[id] = {
       unread: unread.get(id) || 0,
-      last: last ? { text: last.text, ts: last.ts, dir: last.dir } : null,
+      last: last
+        ? {
+            text: last.text,
+            ts: last.ts,
+            dir: last.dir,
+            // surface the receipt state of the last outgoing message (old rows
+            // without a status are treated as 'sent' for back-compat)
+            status: last.dir === 'out' ? last.status || 'sent' : undefined,
+          }
+        : null,
     };
   }
   // include peers with unread but no stored last (shouldn't happen, defensive)

@@ -81,6 +81,11 @@ contextBridge.exposeInMainWorld('filedrop', {
     ipcRenderer.on('message', fn);
     return () => ipcRenderer.removeListener('message', fn);
   },
+  onMessagesUpdated: (cb) => {
+    const fn = (_e, m) => cb(m);
+    ipcRenderer.on('messages-updated', fn);
+    return () => ipcRenderer.removeListener('messages-updated', fn);
+  },
   onOpenConvo: (cb) => {
     const fn = (_e, peerId) => cb(peerId);
     ipcRenderer.on('open-convo', fn);

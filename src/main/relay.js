@@ -19,14 +19,15 @@ const LOOKUP_TIMEOUT = 8000;
  * This client:
  *   - auto-reconnects with backoff and RE-REGISTERS on every (re)open,
  *   - pings every ~25s as an app-level keepalive,
- *   - splits inbound {type:'from'} into 'message' (payload.k==='msg') and
- *     'signal' (payload.k==='rtc') events,
+ *   - splits inbound {type:'from'} into 'message' (payload.k==='msg'),
+ *     'signal' (payload.k==='rtc') and 'ack' (payload.k==='ack') events,
  *   - exposes sendTo(code, payload) and lookup(code) -> Promise<{online,name}>.
  *
  * Events:
  *   'ready'   ({ code, online })       — registration accepted
  *   'message' ({ from, fromName, fromFingerprint, payload })  // chat
  *   'signal'  ({ from, fromName, fromFingerprint, payload })  // call signaling
+ *   'ack'     ({ from, fromName, fromFingerprint, payload })  // delivery/read receipt
  *   'offline' ({ to, ref })            — a sendTo target wasn't connected
  *   'status'  ({ connected })          — transport up/down (UI hint)
  */
@@ -169,6 +170,7 @@ class RelayClient extends EventEmitter {
         };
         if (payload.k === 'msg') this.emit('message', evt);
         else if (payload.k === 'rtc') this.emit('signal', evt);
+        else if (payload.k === 'ack') this.emit('ack', evt);
         // other payload kinds (e.g. future file metadata) are ignored for now
         break;
       }

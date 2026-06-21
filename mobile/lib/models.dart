@@ -61,13 +61,28 @@ class ChatMessage {
   final bool mine; // true = sent by us
   final String text;
   final int ts;
+  final String? id; // message id, for delivery/read receipts (outgoing)
+  String status; // outgoing only: pending | sent | delivered | read
   bool failed;
 
-  ChatMessage({required this.mine, required this.text, required this.ts, this.failed = false});
+  ChatMessage({
+    required this.mine,
+    required this.text,
+    required this.ts,
+    this.id,
+    this.status = 'sent',
+    this.failed = false,
+  });
 
-  Map<String, dynamic> toJson() => {'mine': mine, 'text': text, 'ts': ts, 'failed': failed};
-  factory ChatMessage.fromJson(Map<String, dynamic> j) =>
-      ChatMessage(mine: j['mine'] == true, text: j['text'] ?? '', ts: j['ts'] ?? 0, failed: j['failed'] == true);
+  Map<String, dynamic> toJson() => {'mine': mine, 'text': text, 'ts': ts, 'id': id, 'status': status, 'failed': failed};
+  factory ChatMessage.fromJson(Map<String, dynamic> j) => ChatMessage(
+        mine: j['mine'] == true,
+        text: j['text'] ?? '',
+        ts: j['ts'] ?? 0,
+        id: j['id'] as String?,
+        status: j['status'] ?? 'sent',
+        failed: j['failed'] == true,
+      );
 }
 
 /// A pending incoming transfer awaiting the user's Accept/Decline.

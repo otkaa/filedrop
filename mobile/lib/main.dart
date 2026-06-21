@@ -403,6 +403,19 @@ class _ChatScreenState extends State<ChatScreen> {
 class _Bubble extends StatelessWidget {
   final ChatMessage msg;
   const _Bubble({required this.msg});
+
+  // ⏳ pending → ✓ sent → ✓✓ delivered → ✓✓ (cyan) read
+  IconData get _tickIcon => switch (msg.status) {
+        'pending' => Icons.access_time_rounded,
+        'delivered' || 'read' => Icons.done_all_rounded,
+        _ => Icons.check_rounded,
+      };
+  Color get _tickColor => switch (msg.status) {
+        'read' => const Color(0xFF34E0FF),
+        'pending' => Colors.white54,
+        _ => Colors.white70,
+      };
+
   @override
   Widget build(BuildContext context) {
     return Align(
@@ -416,7 +429,18 @@ class _Bubble extends StatelessWidget {
           borderRadius: BorderRadius.circular(12),
           border: msg.failed ? Border.all(color: Colors.redAccent) : null,
         ),
-        child: Text(msg.text + (msg.failed ? '  (not delivered)' : '')),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Text(msg.text, style: const TextStyle(color: Colors.white, fontSize: 15)),
+            if (msg.mine)
+              Padding(
+                padding: const EdgeInsets.only(top: 2),
+                child: Icon(_tickIcon, size: 14, color: _tickColor),
+              ),
+          ],
+        ),
       ),
     );
   }

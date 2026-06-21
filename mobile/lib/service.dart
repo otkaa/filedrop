@@ -132,7 +132,11 @@ class FiledropService extends ChangeNotifier {
         fingerprint: () => self.fingerprint,
         onMessage: _onRelayMessage,
         onSignal: _onRelaySignal,
-        onReady: (_) => notifyListeners(),
+        onAck: _onRelayAck,
+        onReady: (_) {
+          _flushOutbox(); // send any messages queued while we were offline
+          notifyListeners();
+        },
         onCodeTaken: _regenerateRelayCode,
       );
       // fire-and-forget; the client auto-reconnects with backoff on its own
@@ -143,6 +147,7 @@ class FiledropService extends ChangeNotifier {
 
       _loadRelayPeers(); // restore code contacts before their chats load
       _loadMessages();
+      _rebuildOutbox(); // index outgoing msgs + re-queue any unsent ones
       Permission.notification.request().ignore(); // so chat notifications can show
       Timer.periodic(const Duration(seconds: 5), (_) => _prune());
 
@@ -260,6 +265,14 @@ class FiledropService extends ChangeNotifier {
     if (text is! String) return;
     final ts = (payload['ts'] is num) ? (payload['ts'] as num).toInt() : DateTime.now().millisecondsSinceEpoch;
     _onIncomingMessage(peer.id, peer.name, text, ts);
+    final code = peer.relayCode;
+    if (code == null) return;
+    final id = payload['id'];
+    if (id is String) _relay?.sendTo(code, {'k': 'ack', 'ack': 'delivered', 'id': id}); // ✓✓ for them
+    // if you're already looking at this chat, it's read immediately (✓✓ blue)
+    if (inForeground && activeConvo == peer.id) {
+      _relay?.sendTo(code, {'k': 'ack', 'ack': 'read'});
+    }
   }
 
   // Server says our code is taken by a different live device: mint a new one.
@@ -292,12 +305,20 @@ class FiledropService extends ChangeNotifier {
     });
   }
 
+  // Receipt tracking for outgoing messages: id -> the message (so delivery/read
+  // acks can flip its status), and an outbox of relay sends queued while offline.
+  final Map<String, ChatMessage> _outById = {};
+  final List<Map<String, dynamic>> _outbox = []; // {code, payload, msg}
+
   Future<void> sendMessageTo(String peerId, String text) async {
     text = text.trim();
     if (text.isEmpty) return;
     final ts = DateTime.now().millisecondsSinceEpoch;
-    final msg = ChatMessage(mine: true, text: text, ts: ts);
+    final id = _uuid.v4();
+    // status: pending (⏳) → sent (✓) → delivered (✓✓) → read (✓✓ blue)
+    final msg = ChatMessage(mine: true, text: text, ts: ts, id: id, status: 'pending');
     (messages[peerId] ??= []).add(msg);
+    _outById[id] = msg;
     notifyListeners();
     final peer = peers[peerId];
     if (peer == null) {
@@ -306,13 +327,16 @@ class FiledropService extends ChangeNotifier {
       return;
     }
     if (peer.isRelayOnly) {
-      // Internet path: fire over the relay WebSocket. The server forwards it;
-      // there's no synchronous ack, so we treat a connected relay as delivered.
       final relay = _relay;
-      if (relay == null || !relay.connected || peer.relayCode == null) {
-        msg.failed = true;
+      final payload = {'k': 'msg', 'text': text, 'ts': ts, 'id': id};
+      if (relay != null && relay.connected && peer.relayCode != null) {
+        relay.sendTo(peer.relayCode!, payload);
+        msg.status = 'sent';
+      } else if (peer.relayCode != null) {
+        // You're offline / relay down — keep the hourglass and send on reconnect.
+        _outbox.add({'code': peer.relayCode!, 'payload': payload, 'msg': msg});
       } else {
-        relay.sendTo(peer.relayCode!, {'k': 'msg', 'text': text, 'ts': ts});
+        msg.failed = true;
       }
       _saveMessages();
       notifyListeners();
@@ -323,7 +347,9 @@ class FiledropService extends ChangeNotifier {
         'from': {'id': self.id, 'name': self.name, 'os': self.os, 'port': self.port, 'fingerprint': self.fingerprint},
         'text': text,
         'ts': ts,
+        'id': id,
       });
+      msg.status = (r['status'] == 200) ? 'sent' : 'pending';
       if (r['status'] != 200) msg.failed = true;
     } catch (_) {
       msg.failed = true;
@@ -332,10 +358,76 @@ class FiledropService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // Send messages that were queued while the relay was down, once it reconnects.
+  void _flushOutbox() {
+    final relay = _relay;
+    if (_outbox.isEmpty || relay == null || !relay.connected) return;
+    final queued = List<Map<String, dynamic>>.from(_outbox);
+    _outbox.clear();
+    for (final q in queued) {
+      relay.sendTo(q['code'] as String, q['payload'] as Map<String, dynamic>);
+      (q['msg'] as ChatMessage).status = 'sent';
+    }
+    _saveMessages();
+    notifyListeners();
+  }
+
+  // A delivery/read receipt came back from a peer.
+  void _onRelayAck(String from, Map<String, dynamic> payload) {
+    final ack = payload['ack'];
+    if (ack == 'delivered') {
+      final id = payload['id'];
+      final m = (id is String) ? _outById[id] : null;
+      if (m != null && m.status == 'sent') {
+        m.status = 'delivered';
+        _saveMessages();
+        notifyListeners();
+      }
+    } else if (ack == 'read') {
+      // they opened our chat — everything we've sent them is read
+      final list = messages[from];
+      var changed = false;
+      for (final m in list ?? const <ChatMessage>[]) {
+        if (m.mine && (m.status == 'sent' || m.status == 'delivered')) {
+          m.status = 'read';
+          changed = true;
+        }
+      }
+      if (changed) {
+        _saveMessages();
+        notifyListeners();
+      }
+    }
+  }
+
   void openConvo(String peerId) {
     activeConvo = peerId;
     unread.remove(peerId);
+    // tell the sender we've read their messages (their ticks turn blue)
+    final peer = peers[peerId];
+    if (peer != null && peer.isRelayOnly && peer.relayCode != null) {
+      _relay?.sendTo(peer.relayCode!, {'k': 'ack', 'ack': 'read'});
+    }
     notifyListeners();
+  }
+
+  // After loading saved chats, index our outgoing messages by id (so late acks
+  // still update them) and re-queue any that never sent (status 'pending').
+  void _rebuildOutbox() {
+    messages.forEach((peerId, list) {
+      final peer = peers[peerId];
+      for (final m in list) {
+        if (!m.mine || m.id == null) continue;
+        _outById[m.id!] = m;
+        if (m.status == 'pending' && peer != null && peer.isRelayOnly && peer.relayCode != null) {
+          _outbox.add({
+            'code': peer.relayCode!,
+            'payload': {'k': 'msg', 'text': m.text, 'ts': m.ts, 'id': m.id},
+            'msg': m,
+          });
+        }
+      }
+    });
   }
 
   void closeConvo() {

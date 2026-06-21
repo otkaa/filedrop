@@ -46,7 +46,55 @@ class MessageStore {
   }
 
   get(peerId) {
-    return this.data[peerId] ? this.data[peerId].slice() : [];
+    const list = this.data[peerId] ? this.data[peerId].slice() : [];
+    // Backward-compat: messages stored before receipts existed have no status.
+    // An outgoing message we managed to store was at least handed off, so treat
+    // a missing status as 'sent' (a single ✓) rather than leaving it blank.
+    return list.map((m) => (m && m.dir === 'out' && !m.status ? { ...m, status: 'sent' } : m));
+  }
+
+  /**
+   * Set the status of a single outgoing message (found by its id) to `status`,
+   * but only when its current status is in `fromStatuses` (so a stale ack can't
+   * walk a message backwards, e.g. delivered -> sent). Returns true if changed.
+   */
+  setStatusById(peerId, id, status, fromStatuses) {
+    if (!peerId || !id) return false;
+    const list = this.data[peerId];
+    if (!list) return false;
+    for (const m of list) {
+      if (m && m.dir === 'out' && m.id === id) {
+        const cur = m.status || 'sent';
+        if (fromStatuses && !fromStatuses.includes(cur)) return false;
+        if (cur === status) return false;
+        m.status = status;
+        this._save();
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Mark EVERY outgoing message to a peer whose current status is in
+   * `fromStatuses` as `status` (used for a "read everything" ack, which carries
+   * no id). Returns true if any message changed.
+   */
+  setStatusAll(peerId, status, fromStatuses) {
+    if (!peerId) return false;
+    const list = this.data[peerId];
+    if (!list) return false;
+    let changed = false;
+    for (const m of list) {
+      if (!m || m.dir !== 'out') continue;
+      const cur = m.status || 'sent';
+      if (fromStatuses && !fromStatuses.includes(cur)) continue;
+      if (cur === status) continue;
+      m.status = status;
+      changed = true;
+    }
+    if (changed) this._save();
+    return changed;
   }
 
   /** Every peer id that has stored history (used to rehydrate peers on launch). */

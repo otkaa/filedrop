@@ -1,7 +1,7 @@
 {
   "name": "filedrop",
   "productName": "Filedrop",
-  "version": "1.4.9",
+  "version": "1.5.0",
   "description": "Tray-resident LAN file transfer for Windows & Linux. Send big files between devices on your network, no cloud.",
   "author": {
     "name": "otkaa",

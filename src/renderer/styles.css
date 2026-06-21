@@ -783,6 +783,22 @@ input[type="text"]:focus {
   opacity: 0.6;
   margin-top: 2px;
 }
+
+/* WhatsApp-style receipt ticks (outgoing bubbles only) */
+.bubble .tick {
+  margin-left: 3px;
+  font-size: 10px;
+  letter-spacing: -1px; /* tuck the two checks of ✓✓ together */
+}
+.bubble .tick.pending {
+  letter-spacing: 0;
+}
+/* sent (✓) and delivered (✓✓) ride the bubble's faded time color; read goes
+   bright cyan so it stands out against the blue outgoing bubble. */
+.bubble .tick.read {
+  color: #4fd6ff;
+  opacity: 1;
+}
 .chat-empty {
   margin: auto;
   text-align: center;

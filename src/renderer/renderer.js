@@ -23,6 +23,7 @@ async function init() {
   api.onFilesChosen((paths) => stageFiles(paths));
   api.onFilesDropped((paths) => stageFiles(paths));
   api.onMessage(handleIncomingMessage);
+  api.onMessagesUpdated(handleMessagesUpdated);
   api.onOpenConvo((peerId) => {
     if (!peerId) return;
     // a chat notification was clicked: jump to Devices and open that conversation
@@ -429,9 +430,29 @@ function renderChat() {
 
 function bubble(m) {
   const node = div('bubble ' + (m.dir === 'out' ? 'out' : 'in') + (m.failed ? ' failed' : ''));
+  // WhatsApp-style receipt tick on our own (outgoing) bubbles. Failed bubbles
+  // keep their "not delivered" text and show no tick.
+  const tick = m.dir === 'out' && !m.failed ? tickHtml(m.status) : '';
   node.innerHTML =
-    escapeHtml(m.text) + `<span class="b-time">${m.failed ? 'not delivered · ' : ''}${timeStr(m.ts)}</span>`;
+    escapeHtml(m.text) +
+    `<span class="b-time">${m.failed ? 'not delivered · ' : ''}${timeStr(m.ts)}${tick}</span>`;
   return node;
+}
+
+/**
+ * Receipt indicator for an outgoing message, mirroring WhatsApp:
+ *   pending   ⏳  queued (relay was down)
+ *   sent      ✓   handed to a connected relay
+ *   delivered ✓✓  peer's device acked receipt
+ *   read      ✓✓  (cyan) peer opened the conversation
+ * A missing status is treated as 'sent' for back-compat with old history.
+ */
+function tickHtml(status) {
+  const s = status || 'sent';
+  if (s === 'pending') return ' <span class="tick pending" title="Pending">⏳</span>';
+  if (s === 'delivered') return ' <span class="tick delivered" title="Delivered">✓✓</span>';
+  if (s === 'read') return ' <span class="tick read" title="Read">✓✓</span>';
+  return ' <span class="tick sent" title="Sent">✓</span>'; // 'sent'
 }
 
 async function sendChat() {
@@ -440,19 +461,44 @@ async function sendChat() {
   if (!text || !currentConvo) return;
   inp.value = '';
   const peerId = currentConvo;
-  const msg = { dir: 'out', text, ts: Date.now() };
+  // start optimistically at 'pending' (⏳); the send result tells us whether it
+  // reached a connected relay ('sent' ✓) or stayed queued ('pending').
+  const msg = { dir: 'out', text, ts: Date.now(), status: 'pending' };
 
   // optimistic append; we mark it failed if delivery doesn't go through
   const node = appendBubble(msg);
   convoMessages.push(msg);
 
   const res = await api.sendMessage(peerId, text);
-  if (res && !res.ok && node) {
+  if (res && res.ok) {
+    // adopt the real id + status so later 'delivered'/'read' updates can find it
+    if (res.id) msg.id = res.id;
+    msg.status = res.status || 'sent';
+    if (peerId === currentConvo && node) refreshBubble(node, msg);
+  } else if (node) {
     msg.failed = true;
     node.classList.add('failed');
     const t = node.querySelector('.b-time');
     if (t) t.textContent = 'not delivered · ' + timeStr(msg.ts);
   }
+}
+
+/** Re-render a single bubble node in place (e.g. after its status changed). */
+function refreshBubble(node, m) {
+  const fresh = bubble(m);
+  node.className = fresh.className;
+  node.innerHTML = fresh.innerHTML;
+}
+
+/**
+ * Receipts came in for messages we sent: the main process re-sends the full,
+ * updated history for that peer. Re-render the chat if it's the open one, and
+ * keep convoMessages in sync so a manual re-render shows the right ticks.
+ */
+function handleMessagesUpdated(m) {
+  if (!m || m.peerId !== currentConvo) return;
+  convoMessages = m.messages || [];
+  renderChat();
 }
 
 function handleIncomingMessage(m) {
