@@ -1,5 +1,5 @@
 {
-  "version": "1.2.1",
+  "version": "1.3.0",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Smaller/faster build, fixes updating on Xiaomi, longer connect timeout."
+  "notes": "Connect over the internet by code — no same network or VPN needed. Chat and calls now work anywhere via your unique code."
 }

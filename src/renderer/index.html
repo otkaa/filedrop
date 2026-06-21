@@ -62,9 +62,17 @@
           <div class="row between">
             <h2>Nearby devices</h2>
             <div class="row" style="gap: 12px">
+              <button id="btn-add-code" class="link">+ by code</button>
               <button id="btn-add-link" class="link">+ by address</button>
               <button id="btn-pick" class="btn small">Choose files…</button>
             </div>
+          </div>
+
+          <!-- add a friend over the internet by their code -->
+          <div id="bycode-row" class="bycode hidden">
+            <input id="bycode-input" type="text" placeholder="Friend's code e.g. K7PX-9M2Q" maxlength="11" />
+            <button id="bycode-connect" class="btn small">Connect</button>
+            <div id="bycode-error" class="error small"></div>
           </div>
 
           <div id="devices" class="devices"></div>
@@ -113,6 +121,20 @@
           <span>Device name</span>
           <input id="set-name" type="text" maxlength="40" placeholder="My Device" />
         </label>
+
+        <!-- This device's internet code — share so a friend can add you from anywhere -->
+        <div class="field">
+          <span>Your code <span class="muted small">(share so friends can reach you over the internet)</span></span>
+          <div id="my-code" class="addr-list">
+            <div class="addr-row">
+              <div class="addr-main">
+                <div class="addr-ip" id="relay-code">…</div>
+                <div class="addr-sub" id="relay-code-status">works anywhere — no LAN needed</div>
+              </div>
+              <button id="relay-code-copy" class="addr-btn">Copy</button>
+            </div>
+          </div>
+        </div>
 
         <!-- This device's address(es) — share so a friend can add you -->
         <div class="field">

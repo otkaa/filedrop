@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'call.dart';
@@ -141,6 +142,8 @@ class _DevicesTab extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(12),
       children: [
+        const _ConnectByCode(),
+        const SizedBox(height: 16),
         Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
           const Text('Nearby devices', style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.bold)),
           TextButton(onPressed: () => _addByAddress(context), child: const Text('+ by address')),
@@ -189,6 +192,73 @@ class _DevicesTab extends StatelessWidget {
   }
 }
 
+class _ConnectByCode extends StatefulWidget {
+  const _ConnectByCode();
+  @override
+  State<_ConnectByCode> createState() => _ConnectByCodeState();
+}
+
+class _ConnectByCodeState extends State<_ConnectByCode> {
+  final _code = TextEditingController();
+  bool _busy = false;
+
+  @override
+  void dispose() {
+    _code.dispose();
+    super.dispose();
+  }
+
+  Future<void> _connect() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    final err = await service.addByRelayCode(_code.text);
+    if (!mounted) return;
+    setState(() => _busy = false);
+    if (err != null) {
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(err)));
+    } else {
+      _code.clear();
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Connected — say hi!')));
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        const Text('Connect via code (over the internet)',
+            style: TextStyle(color: Colors.white60, fontSize: 12, fontWeight: FontWeight.bold)),
+        const SizedBox(height: 6),
+        Row(children: [
+          Expanded(
+            child: TextField(
+              controller: _code,
+              textCapitalization: TextCapitalization.characters,
+              autocorrect: false,
+              enabled: !_busy,
+              onSubmitted: (_) => _connect(),
+              decoration: const InputDecoration(
+                hintText: 'XXXX-XXXX',
+                border: OutlineInputBorder(),
+                isDense: true,
+                prefixIcon: Icon(Icons.public_rounded),
+              ),
+            ),
+          ),
+          const SizedBox(width: 8),
+          FilledButton(
+            onPressed: _busy ? null : _connect,
+            child: _busy
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Connect'),
+          ),
+        ]),
+      ],
+    );
+  }
+}
+
 class _DeviceTile extends StatelessWidget {
   final Peer peer;
   const _DeviceTile({required this.peer});
@@ -198,9 +268,14 @@ class _DeviceTile extends StatelessWidget {
     return Card(
       color: const Color(0xFF171A21),
       child: ListTile(
-        leading: Text(_osEmoji(peer.os), style: const TextStyle(fontSize: 22)),
+        leading: Text(peer.isRelayOnly ? '🌐' : _osEmoji(peer.os), style: const TextStyle(fontSize: 22)),
         title: Text(peer.name),
-        subtitle: Text(peer.manual ? 'Added manually' : (peer.os ?? 'On your network'), style: const TextStyle(fontSize: 12)),
+        subtitle: Text(
+          peer.isRelayOnly
+              ? 'via code · ${formatRelayCode(peer.relayCode ?? peer.id)}'
+              : (peer.manual ? 'Added manually' : (peer.os ?? 'On your network')),
+          style: const TextStyle(fontSize: 12),
+        ),
         trailing: Row(mainAxisSize: MainAxisSize.min, children: [
           if (unread > 0)
             Container(
@@ -396,6 +471,30 @@ class _SettingsTabState extends State<_SettingsTab> {
           controller: nameCtrl,
           onSubmitted: (v) => service.setName(v),
           decoration: const InputDecoration(border: OutlineInputBorder()),
+        ),
+        const SizedBox(height: 20),
+        const Text('Your code (share to connect over the internet)', style: TextStyle(color: Colors.white60, fontSize: 12)),
+        const SizedBox(height: 6),
+        Card(
+          color: const Color(0xFF171A21),
+          child: ListTile(
+            leading: const Icon(Icons.public_rounded, color: Color(0xFF4F7CFF)),
+            title: Text(
+              service.relayCode != null ? formatRelayCode(service.relayCode!) : '— — — —',
+              style: const TextStyle(fontFamily: 'monospace', fontSize: 20, letterSpacing: 2),
+            ),
+            subtitle: const Text('Friends add this to reach you anywhere', style: TextStyle(fontSize: 11)),
+            trailing: IconButton(
+              icon: const Icon(Icons.copy_rounded),
+              tooltip: 'Copy code',
+              onPressed: service.relayCode == null
+                  ? null
+                  : () {
+                      Clipboard.setData(ClipboardData(text: formatRelayCode(service.relayCode!)));
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Code copied')));
+                    },
+            ),
+          ),
         ),
         const SizedBox(height: 20),
         const Text('Your address (share so a PC can add you)', style: TextStyle(color: Colors.white60, fontSize: 12)),

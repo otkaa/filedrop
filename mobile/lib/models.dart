@@ -11,6 +11,10 @@ class Peer {
   String? version;
   int lastSeen;
   bool manual;
+  // Relay (internet-via-relay) peers are reached by their CODE over the relay
+  // WebSocket instead of a LAN ip:port. They have no ip/port/fingerprint.
+  bool isRelayOnly;
+  String? relayCode;
 
   Peer({
     required this.id,
@@ -22,6 +26,8 @@ class Peer {
     this.version,
     int? lastSeen,
     this.manual = false,
+    this.isRelayOnly = false,
+    this.relayCode,
   }) : lastSeen = lastSeen ?? DateTime.now().millisecondsSinceEpoch;
 }
 

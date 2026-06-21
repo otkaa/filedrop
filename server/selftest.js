@@ -30,7 +30,7 @@ setTimeout(() => {
     const m = JSON.parse(d);
     if (m.type === 'registered') bobReg = true;
     if (m.type === 'from') {
-      if (m.from === 'AAAA-1111' && m.payload && m.payload.text === 'hello bob') {
+      if (m.from === 'AAAA1111' && m.payload && m.payload.text === 'hello bob') {
         delivered = true;
         console.log('OK: Alice->Bob by code delivered, fromName =', m.fromName);
       }

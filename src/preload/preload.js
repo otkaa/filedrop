@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('filedrop', {
   openDownloadFolder: () => ipcRenderer.invoke('open-download-folder'),
   openPath: (p) => ipcRenderer.invoke('open-path', p),
   addDevice: (host, port) => ipcRenderer.invoke('add-device', { host, port }),
+  addByCode: (code) => ipcRenderer.invoke('add-by-code', code),
   removeSaved: (host, port) => ipcRenderer.invoke('remove-saved', { host, port }),
   copyText: (text) => ipcRenderer.invoke('copy-text', text),
   clearFinished: () => ipcRenderer.invoke('clear-finished'),

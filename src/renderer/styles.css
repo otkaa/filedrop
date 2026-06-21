@@ -799,6 +799,27 @@ input[type="text"]:focus {
   flex: 1;
 }
 
+/* Add a friend by relay code (inline row under "Nearby devices") */
+.bycode {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 10px;
+}
+.bycode input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, "Cascadia Code", Consolas, monospace;
+  text-transform: uppercase;
+}
+.bycode #bycode-connect {
+  flex-shrink: 0;
+}
+.bycode .error {
+  flex-basis: 100%;
+}
+
 /* Scrollbar */
 ::-webkit-scrollbar {
   width: 9px;

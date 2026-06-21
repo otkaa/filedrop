@@ -20,13 +20,14 @@ const {
   Notification,
 } = require('electron');
 
-const { Settings } = require('./settings');
+const { Settings, genRelayCode } = require('./settings');
 const certs = require('./certs');
 const { Discovery } = require('./discovery');
 const { ReceiveServer } = require('./server');
 const { sendFiles, probe, postJson } = require('./sender');
 const { MessageStore } = require('./messages');
 const { Updater } = require('./updater');
+const { RelayClient, normCode, formatCode } = require('./relay');
 const autostart = require('./autostart');
 
 const VERSION = require('../../package.json').version;
@@ -41,11 +42,13 @@ let server = null;
 let self = null;
 let messages = null;
 let updater = null;
+let relay = null; // internet rendezvous/relay client (additive; LAN unchanged)
 let lastUpdateNudge = 0;
 
 const transfers = new Map(); // id -> transfer update
 const pendingRequests = new Map(); // id -> { resolve, timer, data }
 const manualPeers = new Map(); // id -> peer (added by address)
+const relayPeers = new Map(); // code (id) -> relay-only peer { id, name, relay:true, relayCode }
 const transferToController = new Map(); // outgoing transferId -> AbortController
 const unread = new Map(); // peerId -> unread message count
 const lastNotify = new Map(); // peerId -> ts of last chat notification (throttle)
@@ -138,6 +141,11 @@ async function init() {
   discovery.on('error', (err) => console.error('[discovery]', err.message));
   discovery.setStealth(settings.get('stealth'));
   if (!SMOKE) discovery.start(); // skip LAN broadcast during the smoke self-check
+
+  // --- internet relay (additive; LAN behavior is untouched) ---
+  // One outbound WebSocket to the rendezvous server. Registers our persistent
+  // code, auto-reconnects, and carries chat + call signaling to relay-only peers.
+  if (!SMOKE) setupRelay(tls);
 
   // sync autostart with the real OS state on launch
   settings.update({ autoStart: autostart.isEnabled() });
@@ -329,6 +337,7 @@ function wireIpc() {
     if (partial && 'deviceName' in partial && next.deviceName !== before.deviceName) {
       self.name = next.deviceName;
       discovery && discovery.setSelf({ name: next.deviceName });
+      relay && relay.setName(next.deviceName);
     }
     if (partial && 'stealth' in partial && next.stealth !== before.stealth) {
       discovery && discovery.setStealth(next.stealth);
@@ -399,6 +408,9 @@ function wireIpc() {
     removeSavedAddress(host, Number(port));
     pushState();
   });
+
+  // add a peer over the internet by their relay code
+  ipcMain.handle('add-by-code', (_e, code) => addByCode(code));
 
   ipcMain.handle('copy-text', (_e, text) => {
     try {
@@ -513,7 +525,12 @@ function lookupPeer(deviceId) {
   const fromDiscovery = discovery
     ? discovery.getPeers().find((p) => p.id === deviceId)
     : null;
-  return fromDiscovery || manualPeers.get(deviceId) || null;
+  return fromDiscovery || manualPeers.get(deviceId) || relayPeers.get(deviceId) || null;
+}
+
+/** A peer reachable only over the relay (by code) has no ip/port. */
+function isRelayPeer(peer) {
+  return !!(peer && (peer.relay || peer.isRelayOnly) && peer.relayCode && !peer.ip && !peer.port);
 }
 
 // ---------------------------------------------------------------------------
@@ -608,6 +625,111 @@ function normalizeIp(ip) {
   return String(ip || '').replace(/^::ffff:/, '');
 }
 
+// ---------------------------------------------------------------------------
+// Internet relay (rendezvous over WebSocket) — additive transport
+// ---------------------------------------------------------------------------
+/**
+ * Stand up the RelayClient and route its events into the SAME incoming
+ * message/signal paths the LAN HTTPS server already feeds. Relay peers are
+ * keyed by their CODE (not device UUID).
+ */
+function setupRelay(tls) {
+  const code = normCode(settings.get('relayCode'));
+  relay = new RelayClient({
+    deviceId: self.id,
+    deviceName: self.name,
+    fingerprint: tls && tls.fingerprint,
+    code,
+  });
+  // if the server says our code is taken, mint a fresh one and persist it
+  relay.setRegenerate(() => {
+    const next = genRelayCode();
+    settings.update({ relayCode: next });
+    pushState();
+    return next;
+  });
+  relay.on('ready', () => pushState());
+  relay.on('status', () => pushState());
+  relay.on('message', (m) => relayOnIncomingMessage(m));
+  relay.on('signal', (m) => relayOnIncomingSignal(m));
+  relay.on('offline', () => {});
+  relay.connect();
+}
+
+/** Find-or-create a relay-only peer for an incoming code. */
+function ensureRelayPeer(code, name) {
+  const id = normCode(code);
+  if (!id) return null;
+  let peer = relayPeers.get(id);
+  if (!peer) {
+    peer = { id, name: name || id, relay: true, isRelayOnly: true, relayCode: id };
+    relayPeers.set(id, peer);
+    pushState();
+  } else if (name && peer.name === peer.relayCode && name !== peer.relayCode) {
+    // upgrade a placeholder name (the code) to the real device name once known
+    peer.name = name;
+    pushState();
+  }
+  return peer;
+}
+
+/** Incoming relay chat -> the same path the HTTPS server uses. */
+function relayOnIncomingMessage(m) {
+  const payload = m.payload || {};
+  const text = typeof payload.text === 'string' ? payload.text : null;
+  if (text == null) return;
+  const peer = ensureRelayPeer(m.from, m.fromName);
+  if (!peer) return;
+  onIncomingMessage({
+    peerId: peer.id,
+    peerName: peer.name,
+    text: text.slice(0, 8000),
+    ts: Number(payload.ts) || Date.now(),
+  });
+}
+
+/** Incoming relay call signaling -> the same path the HTTPS server uses. */
+function relayOnIncomingSignal(m) {
+  const payload = m.payload || {};
+  const kind = payload.sig; // payload.sig maps directly to the existing "kind"
+  const ALLOWED = new Set(['offer', 'answer', 'decline', 'busy', 'hangup']);
+  // 'unreachable'/'timeout' are local-only outcomes, never sent on the wire
+  if (!ALLOWED.has(kind)) return;
+  const peer = ensureRelayPeer(m.from, m.fromName);
+  if (!peer) return;
+  const sdp = (kind === 'offer' || kind === 'answer') && typeof payload.sdp === 'string' ? payload.sdp : null;
+  onIncomingSignal({
+    peerId: peer.id,
+    peerName: peer.name,
+    kind,
+    callId: payload.callId ? String(payload.callId).slice(0, 64) : null,
+    sdp,
+    // no ip/port/fingerprint: a relay peer is reachable only by its code
+  });
+}
+
+/** Add a peer purely by their relay code (used by the "+ by code" UI). */
+async function addByCode(rawCode) {
+  if (!relay) return { ok: false, error: 'Relay not available' };
+  const code = normCode(rawCode);
+  if (code.length !== 8) return { ok: false, error: 'Enter an 8-character code' };
+  if (code === normCode(settings.get('relayCode'))) {
+    return { ok: false, error: 'That is your own code' };
+  }
+  let res;
+  try {
+    res = await relay.lookup(code);
+  } catch (_) {
+    res = { online: false };
+  }
+  const peer = ensureRelayPeer(code, res && res.name);
+  if (!peer) return { ok: false, error: 'Invalid code' };
+  pushState();
+  // We add the peer even if it's currently offline (like a saved address) so
+  // you can message it; it'll deliver once they come online.
+  return { ok: true, online: !!(res && res.online), name: res && res.name };
+}
+
 function onIncomingMessage(m) {
   messages.add(m.peerId, { dir: 'in', text: m.text, ts: m.ts });
 
@@ -645,6 +767,19 @@ async function sendMessage(deviceId, text) {
     stored.failed = true;
     return { ok: false, error: 'Device is offline', ts };
   }
+
+  // relay-only peer (no ip): deliver over the internet relay by code
+  if (isRelayPeer(peer)) {
+    const sent = relay && relay.sendTo(peer.relayCode, { k: 'msg', text, ts });
+    if (!sent) {
+      stored.failed = true;
+      return { ok: false, error: 'Not connected to relay', ts };
+    }
+    // the relay is fire-and-forget; we can't confirm the peer was online, but a
+    // delivered frame to the server is our best-effort "sent".
+    return { ok: true, ts };
+  }
+
   try {
     const r = await postJson(peer, '/api/message', { from: selfFrom(), text, ts });
     if (!r || r.status !== 200) throw new Error('not delivered');
@@ -683,7 +818,7 @@ function declineIncoming() {
   if (!pendingIncoming) return { ok: false };
   const inc = pendingIncoming;
   clearPendingIncoming(true);
-  if (inc.peer) postJson(inc.peer, '/api/rtc', { from: selfFrom(), kind: 'decline', callId: inc.callId }).catch(() => {});
+  if (inc.peer) sendRtc(inc.peer, { from: selfFrom(), kind: 'decline', callId: inc.callId }).catch(() => {});
   return { ok: true };
 }
 
@@ -713,7 +848,7 @@ function onIncomingSignal(sig) {
 
     // busy if already in / ringing another call
     if (activeCall || pendingIncoming) {
-      if (peer) postJson(peer, '/api/rtc', { from: selfFrom(), kind: 'busy', callId: sig.callId }).catch(() => {});
+      if (peer) sendRtc(peer, { from: selfFrom(), kind: 'busy', callId: sig.callId }).catch(() => {});
       return;
     }
     if (!peer) return; // can't reply, ignore
@@ -765,13 +900,34 @@ function onIncomingSignal(sig) {
   }
 }
 
+/**
+ * Send one WebRTC signaling message to a peer over whichever transport fits:
+ * LAN/manual peers go over the fingerprint-pinned HTTPS POST; relay-only peers
+ * go over the rendezvous WebSocket as a {k:'rtc', sig, callId, sdp} payload.
+ * Returns a Promise<{status}> shaped like postJson so callers treat both alike.
+ */
+function sendRtc(peer, body) {
+  if (isRelayPeer(peer)) {
+    const sent =
+      relay &&
+      relay.sendTo(peer.relayCode, {
+        k: 'rtc',
+        sig: body.kind, // existing "kind" maps directly to payload.sig
+        callId: body.callId || null,
+        sdp: body.sdp || null,
+      });
+    return Promise.resolve({ status: sent ? 200 : 0 });
+  }
+  return postJson(peer, '/api/rtc', body);
+}
+
 /** Relay a signaling message from the call window out to the peer. */
 function sendSignal(payload) {
   if (!activeCall) return { ok: false };
   const peer = activeCall.peer;
   if (!peer) return { ok: false };
   const isOffer = payload && payload.kind === 'offer';
-  postJson(peer, '/api/rtc', {
+  sendRtc(peer, {
     from: selfFrom(),
     kind: payload.kind,
     callId: activeCall.callId,
@@ -842,7 +998,7 @@ function endActiveCall(reason) {
   pendingCallInit = null;
   // tell the peer we hung up, unless they're the one who ended it
   if (!call.remoteEnded && call.peer) {
-    postJson(call.peer, '/api/rtc', { from: selfFrom(), kind: 'hangup', callId: call.callId }).catch(() => {});
+    sendRtc(call.peer, { from: selfFrom(), kind: 'hangup', callId: call.callId }).catch(() => {});
   }
   if (reason !== 'window-closed' && callWindow && !callWindow.isDestroyed()) {
     callWindow.close();
@@ -1015,6 +1171,9 @@ function buildState() {
   const merged = discovered.concat(
     Array.from(manualPeers.values()).filter((p) => !seen.has(p.id))
   );
+  // relay-only peers (added by code, or auto-created when a friend messages
+  // first). Keyed by code, never collide with LAN device UUIDs.
+  for (const p of relayPeers.values()) if (!seen.has(p.id)) merged.push(p);
 
   const devices = merged.map((p) => ({
     id: p.id,
@@ -1022,6 +1181,8 @@ function buildState() {
     os: p.os,
     ip: hideIps ? undefined : p.ip,
     manual: !!p.manual,
+    relay: !!(p.relay || p.isRelayOnly),
+    relayCode: p.relayCode ? formatCode(p.relayCode) : undefined,
   }));
 
   const list = Array.from(transfers.values())
@@ -1067,6 +1228,8 @@ function buildState() {
       version: VERSION,
       port: self.port,
       addresses: localAddresses(), // your own IPs (always shown — you choose to share them)
+      relayCode: formatCode(settings.get('relayCode')), // "XXXX-XXXX" for display
+      relayConnected: !!(relay && relay.connected && relay.registered),
     },
     settings: settings.all,
     devices,
@@ -1139,12 +1302,13 @@ function doQuit() {
   app.isQuitting = true;
   try {
     if (activeCall && activeCall.peer && !activeCall.remoteEnded) {
-      postJson(activeCall.peer, '/api/rtc', { from: selfFrom(), kind: 'hangup', callId: activeCall.callId }).catch(() => {});
+      sendRtc(activeCall.peer, { from: selfFrom(), kind: 'hangup', callId: activeCall.callId }).catch(() => {});
     }
     activeCall = null;
     if (callWindow && !callWindow.isDestroyed()) callWindow.destroy();
     discovery && discovery.stop();
     server && server.stop();
+    relay && relay.stop();
   } catch (_) {}
   app.quit();
 }

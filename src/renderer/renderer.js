@@ -54,6 +54,31 @@ function wireStaticUi() {
   document.getElementById('btn-add').onclick = openModal;
   document.getElementById('btn-add-link').onclick = openModal;
 
+  // "+ by code": reveal the inline input, then connect by relay code
+  document.getElementById('btn-add-code').onclick = toggleByCode;
+  document.getElementById('bycode-connect').onclick = submitByCode;
+  document.getElementById('bycode-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      submitByCode();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      hideByCode();
+    }
+  });
+
+  // copy your own relay code
+  const codeCopy = document.getElementById('relay-code-copy');
+  if (codeCopy) {
+    codeCopy.onclick = () => {
+      const code = (state.self && state.self.relayCode) || '';
+      if (!code) return;
+      api.copyText(code);
+      codeCopy.textContent = 'Copied!';
+      setTimeout(() => (codeCopy.textContent = 'Copy'), 1200);
+    };
+  }
+
   // conversation / chat
   document.getElementById('convo-back').onclick = closeConversation;
   document.getElementById('convo-call').onclick = () => {
@@ -164,6 +189,7 @@ function render() {
   check('set-hideips', s.hideIps);
   check('set-stealth', s.stealth);
   renderUpdate();
+  renderRelayCode();
   renderAddresses();
   renderSaved();
 
@@ -224,28 +250,42 @@ function renderDevices() {
     const unread = chat.unread || 0;
     const lastPreview = chat.last ? (chat.last.dir === 'out' ? 'You: ' : '') + chat.last.text : null;
     const sub = staged.length
-      ? 'Tap to send files'
+      ? d.relay
+        ? 'Files not supported over code yet'
+        : 'Tap to send files'
       : lastPreview ||
-        (d.manual ? 'Added manually' + (d.ip ? ' · ' + d.ip : '') : d.ip || d.os || 'On your network');
+        (d.relay
+          ? 'via code · ' + (d.relayCode || '')
+          : d.manual
+          ? 'Added manually' + (d.ip ? ' · ' + d.ip : '')
+          : d.ip || d.os || 'On your network');
+
+    // files are LAN-only this phase: a relay peer can't be a file target
+    const sendable = staged.length && !d.relay;
 
     node.innerHTML = `
       <div class="dev-avatar">${osEmoji(d.os)}</div>
       <div class="dev-meta">
-        <div class="dev-name">${escapeHtml(d.name)}</div>
+        <div class="dev-name">${escapeHtml(d.name)}${d.relay ? '<span class="addr-tag">CODE</span>' : ''}</div>
         <div class="dev-sub">${escapeHtml(truncate(sub, 44))}</div>
       </div>
       <div class="dev-actions">
         ${unread ? `<span class="dev-badge">${unread > 99 ? '99+' : unread}</span>` : ''}
         ${
-          staged.length
+          sendable
             ? '<div class="dev-send">Send →</div>'
+            : staged.length
+            ? ''
             : '<button class="dev-iconbtn" data-call title="Voice/video call">📞</button>'
         }
       </div>`;
 
-    if (staged.length) {
+    if (sendable) {
       node.classList.add('armed');
       node.onclick = () => sendTo(d.id);
+    } else if (staged.length) {
+      // staged files but this peer can't receive them (relay) — open chat instead
+      node.onclick = () => openConversation(d.id);
     } else {
       node.onclick = () => openConversation(d.id);
       const callBtn = node.querySelector('[data-call]');
@@ -444,6 +484,58 @@ function appendBubble(m) {
   box.appendChild(node);
   box.scrollTop = box.scrollHeight;
   return node;
+}
+
+// ---------------------------------------------------------------------------
+// your internet code (relay) + add-by-code
+// ---------------------------------------------------------------------------
+function renderRelayCode() {
+  const code = (state.self && state.self.relayCode) || '';
+  text('relay-code', code || '…');
+  const status = document.getElementById('relay-code-status');
+  if (status) {
+    status.textContent = state.self && state.self.relayConnected
+      ? 'online — works anywhere, no LAN needed'
+      : 'connecting to relay…';
+  }
+}
+
+function toggleByCode() {
+  const row = document.getElementById('bycode-row');
+  if (!row) return;
+  if (row.classList.contains('hidden')) {
+    row.classList.remove('hidden');
+    document.getElementById('bycode-error').textContent = '';
+    document.getElementById('bycode-input').focus();
+  } else {
+    hideByCode();
+  }
+}
+
+function hideByCode() {
+  const row = document.getElementById('bycode-row');
+  if (!row) return;
+  row.classList.add('hidden');
+  document.getElementById('bycode-input').value = '';
+  document.getElementById('bycode-error').textContent = '';
+}
+
+async function submitByCode() {
+  const inp = document.getElementById('bycode-input');
+  const err = document.getElementById('bycode-error');
+  const code = inp.value.trim();
+  if (!code) {
+    err.textContent = 'Enter a code.';
+    return;
+  }
+  err.textContent = 'Connecting…';
+  const res = await api.addByCode(code);
+  if (res && res.ok) {
+    hideByCode();
+    if (!res.online) toast('Added — they appear offline right now.');
+  } else {
+    err.textContent = (res && res.error) || 'Could not add that code.';
+  }
 }
 
 // ---------------------------------------------------------------------------

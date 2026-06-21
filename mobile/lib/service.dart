@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -10,11 +11,32 @@ import 'call.dart';
 import 'certs.dart';
 import 'discovery.dart';
 import 'models.dart';
+import 'relay_client.dart';
 import 'sender.dart' as net;
 import 'server.dart';
 import 'updater.dart' show kAppVersion;
 
 const _peerTimeout = 12000;
+
+// Code alphabet per the shared wire spec — no I/L/O/0/1.
+const _codeAlphabet = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
+
+String _generateRelayCode() {
+  final rng = Random.secure();
+  final sb = StringBuffer();
+  for (var i = 0; i < 8; i++) {
+    sb.write(_codeAlphabet[rng.nextInt(_codeAlphabet.length)]);
+  }
+  return sb.toString();
+}
+
+/// Group an 8-char code as "XXXX-XXXX" for display. Matching ignores the dash.
+String formatRelayCode(String code) {
+  final c = RelayClient.norm(code);
+  if (c.length <= 4) return c;
+  if (c.length <= 8) return '${c.substring(0, 4)}-${c.substring(4)}';
+  return '${c.substring(0, 4)}-${c.substring(4, 8)}';
+}
 
 /// Single app-wide service: identity, discovery, server, peers, transfers, chat.
 class FiledropService extends ChangeNotifier {
@@ -27,7 +49,11 @@ class FiledropService extends ChangeNotifier {
   late String downloadDir;
   Discovery? _discovery;
   ReceiveServer? _server;
+  RelayClient? _relay;
   final _uuid = Uuid();
+
+  /// Our persistent relay code (raw 8 chars, uppercase). Null until init().
+  String? relayCode;
 
   final peers = <String, Peer>{};
   final transfers = <String, Transfer>{};
@@ -88,6 +114,27 @@ class FiledropService extends ChangeNotifier {
       );
       final port = await _server!.start(53319);
       self.port = port;
+
+      // Relay code: generate once with a secure RNG, then persist forever.
+      var code = _prefs.getString('relayCode');
+      if (code == null || RelayClient.norm(code).length != 8) {
+        code = _generateRelayCode();
+        await _prefs.setString('relayCode', code);
+      }
+      relayCode = RelayClient.norm(code);
+
+      _relay = RelayClient(
+        code: relayCode!,
+        deviceId: self.id,
+        name: () => self.name,
+        fingerprint: () => self.fingerprint,
+        onMessage: _onRelayMessage,
+        onSignal: _onRelaySignal,
+        onReady: (_) => notifyListeners(),
+        onCodeTaken: _regenerateRelayCode,
+      );
+      // fire-and-forget; the client auto-reconnects with backoff on its own
+      _relay!.connect();
 
       _discovery = Discovery(self: self, onMessage: _onDiscovery);
       await _discovery!.start();
@@ -168,6 +215,69 @@ class FiledropService extends ChangeNotifier {
     notifyListeners();
   }
 
+  // --- relay: identify a peer by their CODE (auto-create relay peers) ---
+  /// Find or create a relay-only peer keyed by their normalized 8-char code.
+  /// Called when a friend messages/calls us first so we can see+reply.
+  Peer _ensureRelayPeer(String code, String? fromName) {
+    final c = RelayClient.norm(code);
+    final existing = peers[c];
+    if (existing != null) {
+      if (fromName != null && fromName.isNotEmpty && fromName != c) existing.name = fromName;
+      return existing;
+    }
+    final peer = Peer(
+      id: c,
+      name: (fromName != null && fromName.isNotEmpty) ? fromName : formatRelayCode(c),
+      ip: '',
+      port: 0,
+      isRelayOnly: true,
+      relayCode: c,
+      manual: true,
+    );
+    peers[c] = peer;
+    notifyListeners();
+    return peer;
+  }
+
+  // Incoming relay chat: feed the SAME path the HTTPS server uses.
+  void _onRelayMessage(String from, String fromName, Map<String, dynamic> payload) {
+    final peer = _ensureRelayPeer(from, fromName);
+    final text = payload['text'];
+    if (text is! String) return;
+    final ts = (payload['ts'] is num) ? (payload['ts'] as num).toInt() : DateTime.now().millisecondsSinceEpoch;
+    _onIncomingMessage(peer.id, peer.name, text, ts);
+  }
+
+  // Server says our code is taken by a different live device: mint a new one.
+  String _regenerateRelayCode() {
+    final fresh = _generateRelayCode();
+    relayCode = fresh;
+    _prefs.setString('relayCode', fresh);
+    notifyListeners();
+    return fresh;
+  }
+
+  // Incoming relay call signaling: map payload.sig -> kind, peerId = senderCode,
+  // then dispatch into the SAME _onSignal path the HTTPS server uses.
+  void _onRelaySignal(String from, String fromName, Map<String, dynamic> payload) {
+    final peer = _ensureRelayPeer(from, fromName);
+    final sig = payload['sig'];
+    if (sig is! String) return;
+    // mirror the desktop allow-list: ignore any signal kind we don't handle.
+    const allowed = {'offer', 'answer', 'decline', 'busy', 'hangup'};
+    if (!allowed.contains(sig)) return;
+    final sdp = payload['sdp'] is String ? payload['sdp'] as String : null;
+    _onSignal({
+      'peerId': peer.id,
+      'peerName': peer.name,
+      'kind': sig,
+      'callId': payload['callId']?.toString(),
+      'sdp': sdp,
+      // no peerIp/peerPort/peerFingerprint — _resolvePeer falls back to the
+      // relay peer we just ensured is in the peers map.
+    });
+  }
+
   Future<void> sendMessageTo(String peerId, String text) async {
     text = text.trim();
     if (text.isEmpty) return;
@@ -178,6 +288,19 @@ class FiledropService extends ChangeNotifier {
     final peer = peers[peerId];
     if (peer == null) {
       msg.failed = true;
+      notifyListeners();
+      return;
+    }
+    if (peer.isRelayOnly) {
+      // Internet path: fire over the relay WebSocket. The server forwards it;
+      // there's no synchronous ack, so we treat a connected relay as delivered.
+      final relay = _relay;
+      if (relay == null || !relay.connected || peer.relayCode == null) {
+        msg.failed = true;
+      } else {
+        relay.sendTo(peer.relayCode!, {'k': 'msg', 'text': text, 'ts': ts});
+      }
+      _saveMessages();
       notifyListeners();
       return;
     }
@@ -255,6 +378,14 @@ class FiledropService extends ChangeNotifier {
   String _normIp(String ip) => ip.replaceFirst(RegExp(r'^::ffff:'), '');
 
   Future<bool> _postSignal(Peer peer, String kind, String? callId, String? sdp) async {
+    // Relay-only peers: route signaling over the relay WebSocket. The
+    // CallSession is transport-agnostic; only the carrier changes.
+    if (peer.isRelayOnly) {
+      final relay = _relay;
+      if (relay == null || !relay.connected || peer.relayCode == null) return false;
+      relay.sendTo(peer.relayCode!, {'k': 'rtc', 'sig': kind, 'callId': callId, 'sdp': sdp});
+      return true;
+    }
     try {
       final r = await net.postJson(peer, '/api/rtc', {
         'from': {'id': self.id, 'name': self.name, 'os': self.os, 'port': self.port, 'fingerprint': self.fingerprint},
@@ -319,7 +450,44 @@ class FiledropService extends ChangeNotifier {
   Future<net.SendOutcome> sendFilesTo(String peerId, List<File> files) async {
     final peer = peers[peerId];
     if (peer == null) return net.SendOutcome(false, error: 'Device unavailable');
+    if (peer.isRelayOnly) {
+      // File transfer over the relay is a later phase; only chat + calls work
+      // for internet (code) peers right now.
+      return net.SendOutcome(false, error: 'File transfer over the internet is coming soon. For now, code peers support chat and calls only.');
+    }
     return net.sendFiles(peer, self, files, onTransfer: _onTransfer);
+  }
+
+  // --- add a friend by their relay code (internet) ---
+  Future<String?> addByRelayCode(String rawCode) async {
+    final code = RelayClient.norm(rawCode);
+    if (code.length != 8) return 'Enter the full 8-character code.';
+    if (code == relayCode) return 'That is your own code.';
+    final relay = _relay;
+    if (relay == null) return 'Relay not ready yet — try again in a moment.';
+    final res = await relay.lookup(code);
+    final name = res['name'] is String ? res['name'] as String : null;
+    // Add the peer even if they're offline right now (mirrors desktop): you add a
+    // friend's code once and can reach them whenever you're both online.
+    final existing = peers[code];
+    if (existing != null) {
+      if (name != null && name.isNotEmpty) existing.name = name;
+      existing.isRelayOnly = true;
+      existing.relayCode = code;
+      notifyListeners();
+      return null;
+    }
+    peers[code] = Peer(
+      id: code,
+      name: (name != null && name.isNotEmpty) ? name : formatRelayCode(code),
+      ip: '',
+      port: 0,
+      isRelayOnly: true,
+      relayCode: code,
+      manual: true,
+    );
+    notifyListeners();
+    return null;
   }
 
   // --- manual add ---
