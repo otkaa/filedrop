@@ -50,20 +50,13 @@ jobs:
           cat mobile/android-overlay/compilesdk-override.gradle.kts >> _app/android/build.gradle.kts
           cd _app
           flutter pub get
-          flutter build apk --debug
-          cp build/app/outputs/flutter-apk/app-debug.apk "$GITHUB_WORKSPACE/Filedrop.apk"
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk "$GITHUB_WORKSPACE/Filedrop.apk"
 
+      # CI only validates that the build compiles. The published APK comes from
+      # the maintainer's local build so the app-update signing key stays
+      # consistent (a CI-signed APK has a different key and breaks updates).
       - uses: actions/upload-artifact@v4
         with:
           name: Filedrop-apk
           path: Filedrop.apk
-
-      # rolling prerelease so the phone has a stable download URL (kept separate
-      # from the desktop's "latest" release, so it never affects desktop updates)
-      - name: Publish rolling APK
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: android
-          name: Filedrop Android (latest test build)
-          prerelease: true
-          files: Filedrop.apk

@@ -332,7 +332,7 @@ class FiledropService extends ChangeNotifier {
       notifyListeners();
       return null;
     } catch (e) {
-      return 'Could not reach $host:$port';
+      return "Timed out — make sure that device has Filedrop open and is on the same Wi-Fi or VPN as you ($host:$port).";
     }
   }
 

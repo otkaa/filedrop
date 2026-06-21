@@ -45,7 +45,7 @@ Future<Map<String, dynamic>> postJson(Peer peer, String path, Map<String, dynami
 Future<Peer> probe(String host, int port) async {
   String? fingerprint;
   final client = HttpClient();
-  client.connectionTimeout = const Duration(seconds: 5);
+  client.connectionTimeout = const Duration(seconds: 12);
   client.badCertificateCallback = (cert, h, pt) {
     fingerprint = fingerprintOfDer(cert.der);
     return true;

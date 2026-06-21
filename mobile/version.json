@@ -1,5 +1,5 @@
 {
-  "version": "1.2.0",
+  "version": "1.2.1",
   "url": "https://github.com/otkaa/filedrop/releases/download/android/Filedrop.apk",
-  "notes": "Screen sharing from phone, deafen, noise suppression, tap-to-enlarge, polished call UI."
+  "notes": "Smaller/faster build, fixes updating on Xiaomi, longer connect timeout."
 }
