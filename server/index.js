@@ -31,6 +31,7 @@ const OFFLINE_QUEUE_CAP = 50;
 // works for online peers and must never crash because FCM is misconfigured.
 let admin = null;
 let fcmReady = false;
+let fcmError = null; // why push is off, surfaced in /health for diagnostics
 (function initFcm() {
   let saJson = process.env.FIREBASE_SERVICE_ACCOUNT;
   // LOCAL testing fallback only: read the file if the env var isn't set.
@@ -41,6 +42,7 @@ let fcmReady = false;
     } catch { /* no local file — that's fine */ }
   }
   if (!saJson) {
+    fcmError = 'FIREBASE_SERVICE_ACCOUNT env var not set';
     console.warn('[fcm] FIREBASE_SERVICE_ACCOUNT not set — push DISABLED (online relay still works).');
     return;
   }
@@ -53,6 +55,7 @@ let fcmReady = false;
   } catch (e) {
     admin = null;
     fcmReady = false;
+    fcmError = (e && e.message ? e.message : String(e)).slice(0, 160);
     console.warn('[fcm] invalid service account / init failed — push DISABLED:', e.message);
   }
 })();
@@ -85,7 +88,7 @@ const server = http.createServer((req, res) => {
     // the online codes registered an FCM token. Diagnostics, no secrets.
     let tokens = 0;
     for (const p of peers.values()) if (p.fcmToken) tokens++;
-    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens }));
+    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens, fcmError }));
     return;
   }
   res.writeHead(200, { 'content-type': 'text/plain' });
