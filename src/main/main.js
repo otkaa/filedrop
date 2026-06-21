@@ -1001,14 +1001,29 @@ function onIncomingSignal(sig) {
     }
     if (Notification.isSupported() && !spammy) {
       const callerName = sig.peerName || 'Someone';
-      const n = new Notification({
-        title: `${callerName} is calling`,
-        body: 'Click to answer · Filedrop',
-        icon: fileIcon(),
-      });
-      // Clicking the notification ANSWERS the call: run the same accept path the
-      // UI's Accept button triggers (opens + focuses the call window) — only now
-      // does a window appear, because the user chose to take the call.
+      // scenario="incomingCall" makes Windows show the toast PERSISTENTLY and
+      // bypass Focus Assist / Do-Not-Disturb (like a real phone call), so it
+      // appears even when a browser/game is fullscreen — a plain toast would
+      // auto-dismiss in ~5s and get suppressed. Audio is silent because we play
+      // our own looping ring tone. Clicking the toast answers.
+      const esc = (s) =>
+        String(s).replace(/[<>&'"]/g, (c) => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', "'": '&apos;', '"': '&quot;' }[c]));
+      const toastXml =
+        '<toast scenario="incomingCall" activationType="foreground" launch="answer">' +
+        '<visual><binding template="ToastGeneric">' +
+        `<text>${esc(callerName)} is calling</text>` +
+        '<text>Click to answer · Filedrop</text>' +
+        '</binding></visual>' +
+        '<audio silent="true"/>' +
+        '</toast>';
+      let n;
+      try {
+        n = new Notification({ toastXml });
+      } catch (_) {
+        n = new Notification({ title: `${callerName} is calling`, body: 'Click to answer · Filedrop', icon: fileIcon() });
+      }
+      // Clicking the notification ANSWERS the call (same path as the Accept button) —
+      // only then does a window appear, because the user chose to take the call.
       n.on('click', () => acceptIncoming());
       n.show();
       incomingNotification = n;
