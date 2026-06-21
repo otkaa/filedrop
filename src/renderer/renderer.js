@@ -8,6 +8,7 @@ let editingName = false; // don't clobber the name field while the user types
 let currentConvo = null; // peerId of the open conversation, or null
 let convoMessages = []; // messages for the open conversation
 let currentRing = null; // incoming call { callId, peerId, peerName } or null
+let addrRevealed = false; // "Your address" is hidden until you click Show
 
 // ---------------------------------------------------------------------------
 // boot
@@ -41,6 +42,8 @@ function wireStaticUi() {
       document.getElementById('tab-' + t.dataset.tab).classList.add('active');
       // never strand the user inside a conversation under another tab
       if (currentConvo) closeConversation();
+      // re-hide the address whenever you navigate, so it's private by default
+      addrRevealed = false;
     });
   });
 
@@ -458,6 +461,20 @@ function renderAddresses() {
     box.appendChild(e);
     return;
   }
+
+  // Hidden by default — only revealed when you click Show.
+  if (!addrRevealed) {
+    const reveal = document.createElement('button');
+    reveal.className = 'btn small ghost addr-reveal';
+    reveal.textContent = '👁  Show address';
+    reveal.onclick = () => {
+      addrRevealed = true;
+      renderAddresses();
+    };
+    box.appendChild(reveal);
+    return;
+  }
+
   for (const a of addrs) {
     const full = a.address + ':' + port;
     const row = div('addr-row');
@@ -475,6 +492,15 @@ function renderAddresses() {
     };
     box.appendChild(row);
   }
+
+  const hide = document.createElement('button');
+  hide.className = 'link addr-hide';
+  hide.textContent = 'Hide address';
+  hide.onclick = () => {
+    addrRevealed = false;
+    renderAddresses();
+  };
+  box.appendChild(hide);
 }
 
 function renderSaved() {

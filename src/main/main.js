@@ -191,7 +191,7 @@ function runSmokeTest(port) {
   win.webContents.once('did-finish-load', async () => {
     try {
       results.renderer = await win.webContents.executeJavaScript(
-        '(()=>{try{return (window.filedrop?"api":"noapi")+"|"+document.querySelectorAll(".tab").length+"tabs|"+(document.getElementById("chat-input")?"chat":"nochat")+"|"+(document.querySelector("#my-addresses .addr-row")?"addr":"noaddr");}catch(e){return "ERR:"+e.message;}})()'
+        '(()=>{try{return (window.filedrop?"api":"noapi")+"|"+document.querySelectorAll(".tab").length+"tabs|"+(document.getElementById("chat-input")?"chat":"nochat")+"|"+(document.querySelector("#my-addresses button")?"addr":"noaddr");}catch(e){return "ERR:"+e.message;}})()'
       );
     } catch (err) {
       results.renderer = 'EXEC_ERR:' + err.message;
