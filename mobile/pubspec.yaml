@@ -10,6 +10,7 @@ dependencies:
   flutter:
     sdk: flutter
   basic_utils: ^5.7.0 # self-signed TLS cert generation
+  pointycastle: ^3.9.1 # RSA key types used with basic_utils
   crypto: ^3.0.3 # sha-256 fingerprints (matches the desktop)
   path: ^1.9.0
   shared_preferences: ^2.2.3 # persist identity + saved peers

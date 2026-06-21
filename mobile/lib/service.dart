@@ -26,8 +26,7 @@ class FiledropService extends ChangeNotifier {
   late String downloadDir;
   Discovery? _discovery;
   ReceiveServer? _server;
-  Timer? _pruneTimer;
-  final _uuid = const Uuid();
+  final _uuid = Uuid();
 
   final peers = <String, Peer>{};
   final transfers = <String, Transfer>{};
@@ -88,7 +87,7 @@ class FiledropService extends ChangeNotifier {
       await _discovery!.start();
 
       _loadMessages();
-      _pruneTimer = Timer.periodic(const Duration(seconds: 5), (_) => _prune());
+      Timer.periodic(const Duration(seconds: 5), (_) => _prune());
 
       started = true;
       notifyListeners();
@@ -201,9 +200,9 @@ class FiledropService extends ChangeNotifier {
   }
 
   // --- sending files ---
-  Future<SendOutcome> sendFilesTo(String peerId, List<File> files) async {
+  Future<net.SendOutcome> sendFilesTo(String peerId, List<File> files) async {
     final peer = peers[peerId];
-    if (peer == null) return SendOutcome(false, error: 'Device unavailable');
+    if (peer == null) return net.SendOutcome(false, error: 'Device unavailable');
     return net.sendFiles(peer, self, files, onTransfer: _onTransfer);
   }
 
