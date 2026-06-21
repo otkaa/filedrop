@@ -885,26 +885,29 @@ function onIncomingMessage(m) {
  * Clicking it shows the window AND opens that conversation in the renderer.
  */
 function notifyChat(peerId, peerName, text) {
-  // Notifications off => no toast AND no sound (per settings contract).
-  if (!settings.get('notifyMessages')) return;
-  if (!Notification.isSupported()) return;
+  // Sound and toast are INDEPENDENT: you can have either, both, or neither.
+  const wantSound = settings.get('soundMessages');
+  const wantToast = settings.get('notifyMessages');
+  if (!wantSound && !wantToast) return;
+  // throttle the alert to at most once per 5s per peer so bursts don't spam
   const now = Date.now();
   const prev = lastNotify.get(peerId) || 0;
   if (now - prev <= 5000) return;
   lastNotify.set(peerId, now);
+  // custom 2-note chime — gated only by the sound toggle
+  if (wantSound) playDing();
+  // visual toast — gated only by the notification toggle
+  if (!wantToast || !Notification.isSupported()) return;
   try {
     const n = new Notification({
       title: peerName || 'New message',
       body: String(text || '').slice(0, 120),
       icon: fileIcon(),
-      // We play our own custom "ding" below; tell Windows to stay silent so we
-      // don't get its default notification sound on top of ours.
+      // we play our own chime above, so keep Windows' default sound off
       silent: true,
     });
     n.on('click', () => openConvoFromNotification(peerId));
     n.show();
-    // Custom pleasant 2-note chime (only if the message sound is enabled).
-    if (settings.get('soundMessages')) playDing();
   } catch (_) {
     // notifications are best-effort; never let a failure break message handling
   }
