@@ -65,13 +65,22 @@ let fcmError = null; // why push is off, surfaced in /health for diagnostics
   }
 })();
 
+// Diagnostics: result of the most recent push attempt, surfaced via /health.
+let lastPush = null;
+
 // Fire-and-forget FCM send. Never throws; a bad/expired token logs and continues.
 async function fcmSend(message, label) {
-  if (!fcmReady || !admin) return;
+  if (!fcmReady || !admin) { lastPush = { at: Date.now(), label, ok: false, err: 'fcm-not-ready' }; return; }
+  // How big is the data payload? FCM hard-caps a data message at 4096 bytes.
+  let bytes = 0;
+  try { bytes = Buffer.byteLength(JSON.stringify(message.data || {}), 'utf8'); } catch (_) {}
   try {
-    await admin.messaging().send(message);
+    const id = await admin.messaging().send(message);
+    lastPush = { at: Date.now(), label, ok: true, bytes, id: String(id).slice(-12) };
   } catch (e) {
-    console.warn(`[fcm] send failed (${label || 'msg'}):`, e && e.message ? e.message : e);
+    const err = (e && e.message ? e.message : String(e)).slice(0, 220);
+    lastPush = { at: Date.now(), label, ok: false, bytes, err };
+    console.warn(`[fcm] send failed (${label || 'msg'}):`, err);
   }
 }
 
@@ -91,7 +100,7 @@ const server = http.createServer((req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' });
     // `fcm` = is push enabled (service account loaded); `tokens` = how many of
     // the online codes registered an FCM token. Diagnostics, no secrets.
-    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens: fcmTokens.size, fcmError }));
+    res.end(JSON.stringify({ ok: true, online: peers.size, fcm: fcmReady, tokens: fcmTokens.size, fcmError, lastPush }));
     return;
   }
   res.writeHead(200, { 'content-type': 'text/plain' });
